@@ -1,0 +1,6 @@
+{
+  "name": "KAYAN Events - نظام إدارة الرحلات والفعاليات",
+  "description": "KAYAN Events - منصة متكاملة لإدارة الرحلات والفعاليات لشركة كيان: الحجوزات، الأتوبيسات، المبيعات والماليات، العقود، اللوجستيات، كود QR، والتذكرة الرقمية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

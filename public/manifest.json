@@ -1,0 +1,57 @@
+{
+  "id": "com.kayan.events.app",
+  "name": "KAYAN Events",
+  "short_name": "KAYAN Events",
+  "description": "KAYAN Events & Trips Management Platform - Smart digital boarding passes, ticketing, attendance, logistics and finance.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "travel", "events"],
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Field Supervisor",
+      "short_name": "Supervisor",
+      "description": "Open Field Supervisor screen and quick attendance",
+      "url": "/?view=supervisor",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "QR Scanner",
+      "short_name": "Scanner",
+      "description": "Open Ticket QR Verification Camera",
+      "url": "/?view=scanner",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}
