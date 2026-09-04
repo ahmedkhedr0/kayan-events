@@ -1,0 +1,57 @@
+{
+  "id": "com.kayan.events.app",
+  "name": "KAYAN Events | كيان لإدارة الرحلات والفعاليات",
+  "short_name": "كيان إيفنتس",
+  "description": "المنظومة المتكاملة لإدارة وتفقد رحلات وفعاليات كيان - تحضير إلكتروني وتذاكر ذكية",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#090d16",
+  "theme_color": "#f59e0b",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": ["business", "productivity", "travel", "events"],
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "المشرف الميداني",
+      "short_name": "المشرف",
+      "description": "فتح شاشة المشرف الميداني والتحضير السريع",
+      "url": "/?view=supervisor",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "ماسح QR السريع",
+      "short_name": "الماسح",
+      "description": "فتح كاميرا تفقد التذاكر",
+      "url": "/?view=scanner",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}

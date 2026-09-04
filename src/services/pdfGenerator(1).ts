@@ -1,41 +1,8 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import QRCode from 'qrcode';
 import { ContractData, ReceiptVoucher, Student, TripSettings, TreasuryTransfer, CompanyTreasury, TimelineEvent, DriverInfo, getStudentMealInfo, getCompanionMealInfo } from '../types';
-import { formatTripDateSafely } from '../utils/dateFormatter';
-import { KAYAN_LOGO_BASE64, KAYAN_BADGE_BASE64, KAYAN_EVENTS_LOGO_BASE64 } from '../assets/images/embeddedImages';
-
-// Always use pre-embedded 100% offline Base64 data URIs - zero network lag, zero CORS errors, zero tainted canvas issues on Vercel/production
-export const cachedKayanLogoBase64 = KAYAN_LOGO_BASE64;
-export const cachedKayanBadgeBase64 = KAYAN_BADGE_BASE64;
-export const cachedKayanEventsLogoBase64 = KAYAN_EVENTS_LOGO_BASE64;
-
-export const convertUrlToBase64 = async (url: string): Promise<string> => {
-  if (!url || url.startsWith('data:')) return url;
-  if (url.includes('kayan_logo')) return KAYAN_LOGO_BASE64;
-  if (url.includes('kayan_badge')) return KAYAN_BADGE_BASE64;
-  if (url.includes('kayan_events_logo')) return KAYAN_EVENTS_LOGO_BASE64;
-  try {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => resolve(); // don't reject, fallback gracefully
-      img.src = url;
-    });
-    const c = document.createElement('canvas');
-    c.width = img.naturalWidth || img.width || 400;
-    c.height = img.naturalHeight || img.height || 400;
-    const ctx = c.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(img, 0, 0);
-      return c.toDataURL('image/jpeg', 0.92);
-    }
-  } catch (err) {
-    console.warn('Could not convert asset image to Base64 data URL:', err);
-  }
-  return url;
-};
+import kayanLogo from '../assets/images/kayan_logo_1785354886047.jpg';
+import kayanBadge from '../assets/images/kayan_badge_1785354902221.jpg';
 
 const canvas2d = typeof document !== 'undefined' ? document.createElement('canvas') : null;
 if (canvas2d) {
@@ -122,38 +89,33 @@ export const sanitizeClonedDoc = (clonedDoc: Document) => {
 
     // 1. Sanitize style tags content
     clonedDoc.querySelectorAll('style').forEach((style) => {
-      if (style.textContent && (style.textContent.includes('oklab') || style.textContent.includes('oklch') || style.textContent.includes('color('))) {
-        try {
-          style.textContent = replaceOklabWithRgb(style.textContent);
-        } catch (_) {}
+      if (style.textContent) {
+        style.textContent = replaceOklabWithRgb(style.textContent);
       }
     });
 
-    // 2. Sanitize CSS Rules recursively in stylesheets (including @layer, @media, etc.)
-    const sanitizeRule = (rule: CSSRule) => {
-      try {
-        if ('cssRules' in rule && (rule as any).cssRules) {
-          Array.from((rule as any).cssRules as CSSRuleList).forEach(sanitizeRule);
-        }
-        const styleRule = rule as CSSStyleRule;
-        if (styleRule && styleRule.style && styleRule.style.cssText) {
-          if (styleRule.style.cssText.includes('oklab') || styleRule.style.cssText.includes('oklch') || styleRule.style.cssText.includes('color(')) {
-            styleRule.style.cssText = replaceOklabWithRgb(styleRule.style.cssText);
-          }
-        }
-      } catch (_) {}
-    };
-
+    // 2. Sanitize CSS Rules in stylesheets
     try {
       Array.from(clonedDoc.styleSheets).forEach((sheet) => {
         try {
           const rules = sheet.cssRules || sheet.rules;
           if (rules) {
-            Array.from(rules).forEach(sanitizeRule);
+            Array.from(rules).forEach((rule) => {
+              const styleRule = rule as CSSStyleRule;
+              if (styleRule.style && styleRule.style.cssText) {
+                if (styleRule.style.cssText.includes('oklab') || styleRule.style.cssText.includes('oklch') || styleRule.style.cssText.includes('color(')) {
+                  styleRule.style.cssText = replaceOklabWithRgb(styleRule.style.cssText);
+                }
+              }
+            });
           }
-        } catch (_) {}
+        } catch (e) {
+          // ignore CORS issues with external stylesheets
+        }
       });
-    } catch (_) {}
+    } catch (e) {
+      // ignore
+    }
 
     // 3. Sanitize elements with inline style attributes & computed colors
     clonedDoc.querySelectorAll<HTMLElement>('*').forEach((el) => {
@@ -170,209 +132,33 @@ export const sanitizeClonedDoc = (clonedDoc: Document) => {
   }
 };
 
-const triggerDirectAnchorDownload = (url: string, filename: string) => {
-  if (typeof document === 'undefined') return;
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.setAttribute('download', filename);
-  link.style.display = 'none';
-  link.style.position = 'fixed';
-  link.style.top = '-9999px';
-  link.style.left = '-9999px';
-  document.body.appendChild(link);
-
-  try {
-    const clickEvent = new MouseEvent('click', {
-      view: window,
-      bubbles: true,
-      cancelable: true,
-    });
-    link.dispatchEvent(clickEvent);
-  } catch (_) {
-    link.click();
-  }
-
-  setTimeout(() => {
-    if (document.body.contains(link)) {
-      document.body.removeChild(link);
-    }
-  }, 2000);
-};
-
-export const triggerFileDownload = (blobOrDataUrl: Blob | string, filename: string) => {
-  try {
-    const isBlob = blobOrDataUrl instanceof Blob;
-    const url = isBlob ? URL.createObjectURL(blobOrDataUrl) : blobOrDataUrl;
-    const isMobile = typeof window !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    
-    // On Mobile: Use Web Share API if supported to allow direct saving to Phone Gallery / Photos
-    let didShare = false;
-    if (isMobile && typeof navigator !== 'undefined' && navigator.share && navigator.canShare && isBlob) {
-      try {
-        const mimeType = filename.endsWith('.pdf')
-          ? 'application/pdf'
-          : filename.endsWith('.png')
-          ? 'image/png'
-          : filename.endsWith('.csv')
-          ? 'text/csv'
-          : (blobOrDataUrl as Blob).type || 'image/png';
-
-        const file = new File([blobOrDataUrl], filename, { type: mimeType });
-        if (navigator.canShare({ files: [file] })) {
-          navigator.share({
-            title: filename,
-            text: `تنزيل ملف: ${filename}`,
-            files: [file],
-          }).catch((shareErr) => {
-            // If user dismissed or aborted, trigger direct anchor download safely
-            if (shareErr && shareErr.name !== 'AbortError') {
-              triggerDirectAnchorDownload(url, filename);
-            }
-          });
-          didShare = true;
-        }
-      } catch (shareErr) {
-        console.log('Mobile share prompt error, falling back to direct anchor:', shareErr);
-      }
-    }
-
-    // On Desktop / Laptop (or mobile fallback): Trigger direct anchor download
-    if (!didShare) {
-      triggerDirectAnchorDownload(url, filename);
-    }
-    
-    setTimeout(() => {
-      if (isBlob) {
-        URL.revokeObjectURL(url);
-      }
-    }, 25000);
-  } catch (err) {
-    console.error('Error in triggerFileDownload:', err);
-  }
-};
-
-/**
- * Universal jsPDF Downloader ensuring 100% reliable downloads on Mobile, Desktop, PWA, and iframe
- */
-export const saveJsPDFDoc = (doc: jsPDF, filename: string): boolean => {
-  try {
-    const blob = doc.output('blob');
-    if (blob) {
-      triggerFileDownload(blob, filename);
-      return true;
-    }
-  } catch (err) {
-    console.warn('Error extracting blob from jsPDF doc, falling back to doc.save:', err);
-  }
-  try {
-    doc.save(filename);
-    return true;
-  } catch (err) {
-    console.error('Failed to save jsPDF doc:', err);
-    return false;
-  }
-};
-
 export const fallbackPrintElement = (_element: HTMLElement, title: string) => {
   // Silent fallback - do NOT automatically open browser print dialog without user intent
   console.warn(`Fallback rendering completed for: ${title}`);
-};
-
-/**
- * Universal A4 Paginated PDF Exporter ensuring 100% reliable multi-page or single-page A4 PDFs
- * without clipping, truncation, or blank trailing pages.
- */
-export const createA4PaginatedPDF = (
-  canvas: HTMLCanvasElement,
-  filename: string,
-  orientation: 'portrait' | 'landscape' = 'portrait',
-  metaTitle?: string
-): boolean => {
-  try {
-    const imgData = canvas.toDataURL('image/png', 1.0);
-    const doc = new jsPDF({
-      orientation,
-      unit: 'mm',
-      format: 'a4',
-      compress: true,
-    });
-
-    const pageWidth = doc.internal.pageSize.getWidth(); // 210 for portrait, 297 for landscape
-    const pageHeight = doc.internal.pageSize.getHeight(); // 297 for portrait, 210 for landscape
-
-    const imgWidth = pageWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-    if (metaTitle) {
-      doc.setProperties({
-        title: metaTitle,
-        author: 'KAYAN Management System',
-        creator: 'KAYAN Events & Tours',
-      });
-    }
-
-    // Smart single-page fit if content fits or slightly exceeds (within 12% overflow tolerance)
-    if (imgHeight <= pageHeight * 1.12) {
-      const scale = imgHeight > pageHeight ? pageHeight / imgHeight : 1;
-      const renderW = imgWidth * scale;
-      const renderH = imgHeight * scale;
-      const xOffset = (pageWidth - renderW) / 2;
-      doc.addImage(imgData, 'PNG', xOffset, 0, renderW, renderH, undefined, 'FAST');
-    } else {
-      // Multi-Page A4 Pagination
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      // Page 1
-      doc.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-      heightLeft -= pageHeight;
-
-      // Subsequent Pages
-      while (heightLeft > 5) { // 5mm margin tolerance to avoid blank pages
-        position -= pageHeight;
-        doc.addPage();
-        doc.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-        heightLeft -= pageHeight;
-      }
-    }
-
-    return saveJsPDFDoc(doc, filename);
-  } catch (err) {
-    console.error(`Error generating A4 PDF [${filename}]:`, err);
-    return false;
-  }
 };
 
 export const exportDOMElementToPDF = async (
   element: HTMLElement,
   filename: string,
   orientation: 'portrait' | 'landscape' = 'portrait',
-  _format: string | number[] = 'a4'
+  format: string | number[] = 'a4'
 ) => {
   try {
-    if (typeof document !== 'undefined' && document.fonts) {
-      try { await document.fonts.ready; } catch (e) {}
-    }
-
     const canvas = await html2canvas(element, {
-      scale: 2.5,
+      scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: (clonedDoc, clonedElement) => {
         sanitizeClonedDoc(clonedDoc);
-        if (clonedElement) {
-          clonedElement.style.transform = 'none';
-        }
         // Clean up input fields to look like plain crisp typography in PDF
-        const inputs = clonedElement.querySelectorAll('input, textarea, select');
+        const inputs = clonedElement.querySelectorAll('input, textarea');
         inputs.forEach((input) => {
-          const htmlInput = input as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+          const htmlInput = input as HTMLInputElement | HTMLTextAreaElement;
           const span = clonedDoc.createElement('span');
-          span.textContent = htmlInput.value || (htmlInput as any).placeholder || '';
-          span.className = (htmlInput.className || '').replace(/tracking-\S+/g, '');
+          span.textContent = htmlInput.value || htmlInput.placeholder || '';
+          span.className = htmlInput.className.replace(/tracking-\S+/g, '');
           span.style.border = 'none';
           span.style.background = 'transparent';
           span.style.outline = 'none';
@@ -386,7 +172,19 @@ export const exportDOMElementToPDF = async (
       },
     });
 
-    return createA4PaginatedPDF(canvas, filename, orientation);
+    const imgData = canvas.toDataURL('image/png');
+    const doc = new jsPDF({
+      orientation,
+      unit: 'mm',
+      format,
+    });
+
+    const pdfWidth = doc.internal.pageSize.getWidth();
+    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+    doc.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+    doc.save(filename);
+    return true;
   } catch (err) {
     console.error('Error exporting DOM element to PDF:', err);
     return false;
@@ -416,7 +214,7 @@ export const generateContractCanvas = async (
         scale: 3,
         backgroundColor: '#ffffff',
         useCORS: true,
-        allowTaint: false,
+        allowTaint: true,
         logging: false,
         onclone: (clonedDoc, clonedElement) => {
           sanitizeClonedDoc(clonedDoc);
@@ -468,7 +266,7 @@ export const generateContractCanvas = async (
       <!-- Header Branding with Official Logo -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1b4b; padding-bottom: 16px; margin-bottom: 20px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="68" height="68" alt="KAYAN Badge" style="border-radius: 12px; border: 2px solid #d97706; object-fit: cover;" />
+          <img src="${kayanBadge}" width="68" height="68" alt="KAYAN Badge" style="border-radius: 12px; border: 2px solid #d97706; object-fit: cover;" />
           <div>
             <h1 style="margin: 0; font-size: 21px; font-weight: 900; color: #1e1b4b; line-height: 1.2;">
               KAYAN EVENTS & TOURS
@@ -612,7 +410,7 @@ export const generateContractCanvas = async (
       scale: 3,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -641,16 +439,29 @@ export const generateContractPDF = async (
     return;
   }
 
-  const partyNameStr = contract.partyName || contract.id || 'OFFICIAL';
-  const sanitizedName = partyNameStr.replace(/[^\w\u0600-\u06FF]/g, '_');
-  const filename = `KAYAN_Contract_${contract.type || 'Official'}_${sanitizedName}.pdf`;
+  try {
+    const imgData = canvas.toDataURL('image/png');
+    const pdfWidthMm = 210; // Standard A4 width
+    const pdfHeightMm = Math.round((canvas.height * pdfWidthMm) / canvas.width) + 2;
 
-  return createA4PaginatedPDF(
-    canvas,
-    filename,
-    'portrait',
-    `عقد_${contract.title || 'كيان'}_${partyNameStr}`
-  );
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: [pdfWidthMm, pdfHeightMm],
+    });
+
+    doc.addImage(imgData, 'PNG', 0, 0, pdfWidthMm, pdfHeightMm);
+    doc.setProperties({
+      title: `عقد_${contract.title}_${contract.partyName}`,
+      subject: `عقد رسمي معتمد #${contract.id}`,
+      author: settings.companyNameAr || 'KAYAN Events',
+      creator: 'KAYAN Management System',
+    });
+
+    doc.save(`KAYAN_Contract_${contract.type}_${contract.id}.pdf`);
+  } catch (err) {
+    console.error('Error saving contract PDF:', err);
+  }
 };
 
 /**
@@ -733,7 +544,7 @@ export const generateReceiptCanvas = async (
         scale: 3,
         backgroundColor: '#ffffff',
         useCORS: true,
-        allowTaint: false,
+        allowTaint: true,
         logging: false,
         onclone: (clonedDoc, clonedElement) => {
           sanitizeClonedDoc(clonedDoc);
@@ -781,16 +592,6 @@ export const generateReceiptCanvas = async (
     ? 'linear-gradient(135deg, #064e3b 0%, #065f46 50%, #064e3b 100%)'
     : 'linear-gradient(135deg, #7f1d1d 0%, #991b1b 50%, #7f1d1d 100%)';
   const amountWords = voucher.amountInWords || `${voucher.amount} جنيه مصري لا غير`;
-
-  // Financial Settlement Breakdown values
-  const totalAmount = voucher.totalAmount ?? voucher.amount;
-  const paidNow = voucher.paidNow ?? voucher.amount;
-  const previousPaid = voucher.previousPaid ?? 0;
-  const previousRemaining = voucher.previousRemaining ?? Math.max(0, totalAmount - previousPaid);
-  const totalPaidSoFar = voucher.totalPaidSoFar ?? (previousPaid + paidNow);
-  const currentRemaining = voucher.currentRemaining ?? Math.max(0, totalAmount - totalPaidSoFar);
-  const isSettled = voucher.isFullyPaid ?? (currentRemaining <= 0);
-  const showFinancialBreakdown = (voucher.totalAmount !== undefined && voucher.totalAmount > 0) || voucher.previousPaid !== undefined || voucher.isDeposit || isSettled || previousPaid > 0 || currentRemaining > 0;
 
   container.innerHTML = `
     <div style="border: 6px double ${themeBorder}; padding: 24px; border-radius: 20px; background: #ffffff; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.08); font-family: 'Tajawal', sans-serif;">
@@ -889,62 +690,6 @@ export const generateReceiptCanvas = async (
         </div>
       </div>
 
-      ${showFinancialBreakdown ? `
-      <!-- Financial Settlement Breakdown Block (كشف الحركة والمركز المالي) -->
-      <div style="background: ${isSettled ? '#f0fdf4' : '#fffbeb'}; border: 2px solid ${isSettled ? '#86efac' : '#fde68a'}; border-radius: 14px; padding: 12px 16px; margin-bottom: 20px; font-size: 12px; font-family: 'Tajawal', sans-serif;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid ${isSettled ? '#bbf7d0' : '#fef3c7'}; padding-bottom: 6px;">
-          <strong style="color: ${isSettled ? '#166534' : '#92400e'}; font-size: 13px; font-weight: 900; display: flex; align-items: center; gap: 6px;">
-            ${isSettled ? '✓ كشف تسوية وتصفية الحساب (خالص السداد بالكامل)' : '⏳ كشف وتفصيل حركة سداد العربون/الدفعة'}
-          </strong>
-          ${isSettled ? `
-            <span style="background: #15803d; color: #ffffff; padding: 3px 12px; border-radius: 20px; font-weight: 900; font-size: 11px; border: 1px solid #166534; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
-              ✓ خالص السداد بالكامل
-            </span>
-          ` : `
-            <span style="background: #f59e0b; color: #ffffff; padding: 3px 12px; border-radius: 20px; font-weight: 900; font-size: 11px; border: 1px solid #d97706;">
-              عربون / سداد جزئي
-            </span>
-          `}
-        </div>
-
-        <div style="display: flex; gap: 8px; justify-content: space-between; text-align: center;">
-          
-          <div style="flex: 1; background: #ffffff; padding: 8px 6px; border-radius: 8px; border: 1px solid #cbd5e1;">
-            <span style="font-size: 10px; color: #64748b; font-weight: 700; display: block; margin-bottom: 2px;">المبلغ الإجمالي الكلي</span>
-            <strong style="font-size: 14px; color: #0f172a; font-weight: 900; font-family: monospace;">${totalAmount.toLocaleString()} ج.م</strong>
-          </div>
-
-          ${previousPaid > 0 ? `
-          <div style="flex: 1; background: #ffffff; padding: 8px 6px; border-radius: 8px; border: 1px solid #fed7aa;">
-            <span style="font-size: 10px; color: #c2410c; font-weight: 700; display: block; margin-bottom: 2px;">المدفوع سابقاً (عربون)</span>
-            <strong style="font-size: 14px; color: #ea580c; font-weight: 900; font-family: monospace;">${previousPaid.toLocaleString()} ج.م</strong>
-            <span style="font-size: 9px; color: #9a3412; font-weight: 700; display: block; margin-top: 1px;">وكان باقي: ${previousRemaining.toLocaleString()} ج.م</span>
-          </div>
-          ` : ''}
-
-          <div style="flex: 1; background: #ffffff; padding: 8px 6px; border-radius: 8px; border: 2px solid #16a34a; box-shadow: 0 2px 5px rgba(22, 163, 74, 0.12);">
-            <span style="font-size: 10px; color: #15803d; font-weight: 800; display: block; margin-bottom: 2px;">المدفوع حالياً (الإيصال)</span>
-            <strong style="font-size: 15px; color: #16a34a; font-weight: 900; font-family: monospace;">${paidNow.toLocaleString()} ج.م</strong>
-          </div>
-
-          <div style="flex: 1; background: #ffffff; padding: 8px 6px; border-radius: 8px; border: 1px solid #cbd5e1;">
-            <span style="font-size: 10px; color: #334155; font-weight: 700; display: block; margin-bottom: 2px;">إجمالي المدفوع حتى الآن</span>
-            <strong style="font-size: 14px; color: #0f172a; font-weight: 900; font-family: monospace;">${totalPaidSoFar.toLocaleString()} ج.م</strong>
-          </div>
-
-          <div style="flex: 1; background: ${currentRemaining > 0 ? '#fff1f2' : '#f0fdf4'}; padding: 8px 6px; border-radius: 8px; border: 1px solid ${currentRemaining > 0 ? '#fecdd3' : '#86efac'};">
-            <span style="font-size: 10px; color: ${currentRemaining > 0 ? '#be123c' : '#15803d'}; font-weight: 800; display: block; margin-bottom: 2px;">
-              ${currentRemaining > 0 ? 'المتبقي للسداد' : 'الموقف المالي'}
-            </span>
-            <strong style="font-size: 14px; color: ${currentRemaining > 0 ? '#e11d48' : '#16a34a'}; font-weight: 900; font-family: monospace;">
-              ${currentRemaining > 0 ? `${currentRemaining.toLocaleString()} ج.م` : 'خالص السداد ✓'}
-            </strong>
-          </div>
-
-        </div>
-      </div>
-      ` : ''}
-
       <!-- Signatures & Official Stamp Row -->
       <div style="display: flex; justify-content: space-between; align-items: flex-end; padding-top: 14px; border-top: 1px dashed #cbd5e1; margin-bottom: 12px;">
         
@@ -1006,7 +751,7 @@ export const generateReceiptCanvas = async (
       scale: 3,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -1035,15 +780,32 @@ export const generateReceiptPDF = async (
     return;
   }
 
-  const sanitizedPerson = (voucher.personName || 'عميل').replace(/[^\w\u0600-\u06FF]/g, '_');
-  const filename = `KAYAN_Voucher_${voucher.voucherNumber || '001'}_${sanitizedPerson}.pdf`;
+  try {
+    const imgData = canvas.toDataURL('image/png');
 
-  return createA4PaginatedPDF(
-    canvas,
-    filename,
-    'portrait',
-    `سند_${voucher.voucherNumber}_${voucher.personName}`
-  );
+    // Calculate exact page dimensions in millimeters to guarantee 0% cutoff
+    const pdfWidthMm = 210; // Standard A4 width (210mm)
+    const pdfHeightMm = Math.round((canvas.height * pdfWidthMm) / canvas.width) + 2;
+
+    const doc = new jsPDF({
+      orientation: pdfHeightMm > pdfWidthMm ? 'portrait' : 'landscape',
+      unit: 'mm',
+      format: [pdfWidthMm, pdfHeightMm],
+    });
+
+    doc.addImage(imgData, 'PNG', 0, 0, pdfWidthMm, pdfHeightMm);
+
+    doc.setProperties({
+      title: `سند_${voucher.voucherNumber}_${voucher.personName}`,
+      subject: `إيصال استلام نقدية #${voucher.voucherNumber}`,
+      author: settings.companyNameAr || 'KAYAN Events',
+      creator: 'KAYAN Management System',
+    });
+
+    doc.save(`KAYAN_Voucher_${voucher.voucherNumber}.pdf`);
+  } catch (err) {
+    console.error('Error saving receipt PDF:', err);
+  }
 };
 
 /**
@@ -1104,558 +866,47 @@ export const exportReceiptAsHighResImage = async (
 };
 
 /**
- * Direct 2D Canvas VIP Boarding Pass Renderer
- * Guaranteed 100% offline, zero-network, zero CSS bugs, instantaneous execution on all mobile & desktop browsers
- */
-export const drawTicketPassToCanvas = async (
-  student: Student,
-  settings: TripSettings
-): Promise<HTMLCanvasElement> => {
-  if (typeof document !== 'undefined' && document.fonts) {
-    try {
-      await document.fonts.ready;
-    } catch (_) {}
-  }
-
-  const width = 1400;
-  const height = 760;
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return canvas;
-
-  // Helper for rounded rectangle with fallback
-  const drawRoundedRect = (x: number, y: number, w: number, h: number, r: number) => {
-    ctx.beginPath();
-    if (typeof (ctx as any).roundRect === 'function') {
-      (ctx as any).roundRect(x, y, w, h, r);
-    } else {
-      ctx.moveTo(x + r, y);
-      ctx.lineTo(x + w - r, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-      ctx.lineTo(x + w, y + h - r);
-      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-      ctx.lineTo(x + r, y + h);
-      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-      ctx.lineTo(x, y + r);
-      ctx.quadraticCurveTo(x, y, x + r, y);
-    }
-    ctx.closePath();
-  };
-
-  // 1. Base Luxury Card Gradient Background
-  drawRoundedRect(16, 16, width - 32, height - 32, 36);
-  const cardGrad = ctx.createLinearGradient(0, 0, width, height);
-  cardGrad.addColorStop(0, '#020617');
-  cardGrad.addColorStop(0.45, '#0f172a');
-  cardGrad.addColorStop(1, '#1e1b4b');
-  ctx.fillStyle = cardGrad;
-  ctx.fill();
-
-  // 2. Gold Luxury Card Border
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = '#f59e0b';
-  ctx.stroke();
-
-  // 3. Scalloped Cutout Notches (Left and Right Tear Lines)
-  ctx.fillStyle = '#090d16';
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)';
-  ctx.lineWidth = 3;
-  // Left primary tear notch
-  ctx.beginPath();
-  ctx.arc(16, height / 2, 28, -Math.PI / 2, Math.PI / 2, false);
-  ctx.fill();
-  ctx.stroke();
-  // Right primary tear notch
-  ctx.beginPath();
-  ctx.arc(width - 16, height / 2, 28, Math.PI / 2, (3 * Math.PI) / 2, false);
-  ctx.fill();
-  ctx.stroke();
-
-  // Small scalloped circles along left and right edges
-  const scallopPositions = [120, 200, height - 200, height - 120];
-  scallopPositions.forEach((posY) => {
-    // Left
-    ctx.beginPath();
-    ctx.arc(16, posY, 10, -Math.PI / 2, Math.PI / 2, false);
-    ctx.fillStyle = '#090d16';
-    ctx.fill();
-    ctx.stroke();
-    // Right
-    ctx.beginPath();
-    ctx.arc(width - 16, posY, 10, Math.PI / 2, (3 * Math.PI) / 2, false);
-    ctx.fillStyle = '#090d16';
-    ctx.fill();
-    ctx.stroke();
-  });
-
-  // Load Base64 Images
-  const loadImg = (src: string): Promise<HTMLImageElement | null> =>
-    new Promise((resolve) => {
-      if (!src) return resolve(null);
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => resolve(null);
-      img.src = src;
-    });
-
-  const [badgeImg, logoImg] = await Promise.all([
-    loadImg(cachedKayanBadgeBase64),
-    loadImg(cachedKayanLogoBase64),
-  ]);
-
-  // 4. Header Section
-  // Top Badge (Right aligned for RTL)
-  if (badgeImg) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(width - 90, 75, 34, 0, Math.PI * 2);
-    ctx.closePath();
-    ctx.clip();
-    ctx.drawImage(badgeImg, width - 124, 41, 68, 68);
-    ctx.restore();
-    ctx.beginPath();
-    ctx.arc(width - 90, 75, 34, 0, Math.PI * 2);
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = '#fde047';
-    ctx.stroke();
-  }
-
-  // Header Titles (Arabic RTL)
-  ctx.textAlign = 'right';
-  ctx.direction = 'rtl';
-  ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 28px "Tajawal", system-ui, sans-serif';
-  ctx.fillText(settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات', width - 140, 70);
-
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", system-ui, sans-serif';
-  ctx.fillText('تذكرة صعود رقمية رسمية • OFFICIAL BOARDING PASS   [ معتمدة ✓ ]', width - 140, 100);
-
-  // Left Ticket Code Badge
-  drawRoundedRect(50, 42, 240, 68, 16);
-  const codeGrad = ctx.createLinearGradient(50, 42, 290, 110);
-  codeGrad.addColorStop(0, 'rgba(245, 158, 11, 0.25)');
-  codeGrad.addColorStop(1, 'rgba(217, 119, 6, 0.35)');
-  ctx.fillStyle = codeGrad;
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#f59e0b';
-  ctx.stroke();
-
-  ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(253, 224, 71, 0.9)';
-  ctx.font = 'bold 13px "Tajawal", sans-serif';
-  ctx.fillText('كود التذكرة الفريد', 170, 66);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '900 24px monospace';
-  ctx.fillText(`#${student.ticketCode}`, 170, 96);
-
-  // 5. Promotional Brand Banner Strip
-  drawRoundedRect(50, 126, width - 100, 94, 16);
-  ctx.save();
-  ctx.clip();
-  if (logoImg) {
-    ctx.drawImage(logoImg, 50, 126, width - 100, 94);
-  } else {
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(50, 126, width - 100, 94);
-  }
-  // Dark overlay
-  const bannerOverlay = ctx.createLinearGradient(0, 126, 0, 220);
-  bannerOverlay.addColorStop(0, 'rgba(2, 6, 23, 0.75)');
-  bannerOverlay.addColorStop(1, 'rgba(2, 6, 23, 0.92)');
-  ctx.fillStyle = bannerOverlay;
-  ctx.fillRect(50, 126, width - 100, 94);
-  ctx.restore();
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
-  ctx.stroke();
-
-  // Floating Pills on Banner
-  // Right Pill: Trip Name
-  drawRoundedRect(width - 480, 142, 410, 60, 12);
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.9)';
-  ctx.fill();
-  ctx.strokeStyle = '#f59e0b';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 20px "Tajawal", sans-serif';
-  ctx.fillText(`✨ ${settings.tripName || 'fun day نظم الشريف 2027'}`, width - 90, 180);
-
-  // Left Pill: Brand Title
-  drawRoundedRect(70, 142, 280, 60, 12);
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.9)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#f8fafc';
-  ctx.font = '800 16px monospace';
-  ctx.fillText('KAYAN TOURS & EVENTS', 210, 178);
-
-  // 6. Main Content Split: Right Details (width - 490), Left QR Stub (360px)
-  // Left QR Stub: x = 50, y = 236, w = 370, h = 484
-  drawRoundedRect(50, 236, 370, 484, 20);
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
-  ctx.lineWidth = 2;
-  // Dashed border for stub tear line
-  ctx.save();
-  ctx.setLineDash([8, 6]);
-  ctx.stroke();
-  ctx.restore();
-
-  // QR Code generation
-  const qrPayload = JSON.stringify({
-    ticket: student.ticketCode,
-    name: student.name,
-    bus: student.busNumber,
-    seat: student.seatNumber || 'N/A',
-    phone: student.phone,
-    pickup: student.pickupPoint || '',
-    status: student.paymentStatus,
-  });
-
-  const qrCanvas = document.createElement('canvas');
-  try {
-    await QRCode.toCanvas(qrCanvas, qrPayload, {
-      width: 250,
-      margin: 1,
-      color: {
-        dark: '#020617',
-        light: '#ffffff',
-      },
-    });
-  } catch (_) {}
-
-  // White Box for QR Code
-  drawRoundedRect(75, 252, 320, 310, 18);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-  ctx.strokeStyle = '#f59e0b';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-
-  if (qrCanvas.width > 0) {
-    ctx.drawImage(qrCanvas, 105, 266, 260, 260);
-  }
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#020617';
-  ctx.font = '900 18px monospace';
-  ctx.fillText(`KYN - ${student.ticketCode}`, 235, 550);
-
-  // Verification Tag below QR Box
-  ctx.fillStyle = '#34d399';
-  ctx.font = 'bold 16px "Tajawal", sans-serif';
-  ctx.fillText('✓ تذكرة صعود إلكترونية معتمدة', 235, 592);
-
-  // Barcode Graphic Strip
-  drawRoundedRect(75, 620, 320, 80, 12);
-  ctx.fillStyle = '#020617';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Draw simulated barcode lines
-  const barXStart = 95;
-  const barWidths = [3, 6, 2, 4, 2, 7, 3, 2, 5, 3, 8, 2, 4, 3, 6, 2, 5, 3, 7, 2, 4, 3, 6, 2, 5, 3];
-  let curBarX = barXStart;
-  ctx.fillStyle = '#f8fafc';
-  barWidths.forEach((w) => {
-    ctx.fillRect(curBarX, 634, w, 32);
-    curBarX += w + 4;
-  });
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 12px monospace';
-  ctx.fillText(`VERIFIED PASS #${student.ticketCode}`, 235, 686);
-
-  // 7. Right Student Details: x = 444, y = 236, w = 906, h = 484
-  const rightX = width - 70;
-
-  // Passenger Header
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 16px "Tajawal", sans-serif';
-  ctx.fillText(`المسافر: ${student.name}   |   رقم الهاتف: ${student.phone}`, rightX, 265);
-
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '900 36px "Tajawal", sans-serif';
-  ctx.fillText(student.name, rightX, 310);
-
-  // Logistics Box
-  drawRoundedRect(444, 330, 906, 305, 16);
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(51, 65, 85, 0.9)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  const formattedDate = formatTripDateSafely(settings.tripDate);
-
-  // Row 1: Trip Name & Date
-  // Left: Date
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('تاريخ وتوقيت الرحلة:', 860, 362);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 19px "Tajawal", sans-serif';
-  ctx.fillText(formattedDate, 860, 392);
-
-  // Right: Trip Destination
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('الرحلة والوجهة:', rightX - 20, 362);
-  ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 21px "Tajawal", sans-serif';
-  ctx.fillText(settings.tripName || 'رحلة اليوم الترفيهي', rightX - 20, 392);
-
-  // Divider Line Row 1
-  ctx.strokeStyle = '#1e293b';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(464, 412);
-  ctx.lineTo(width - 90, 412);
-  ctx.stroke();
-
-  // Row 2: Bus & Seat Box + Payment Box
-  // Bus & Seat Box: x = 900, y = 426, w = 430, h = 95
-  drawRoundedRect(900, 426, 430, 95, 14);
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(96, 165, 250, 0.45)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('الحافلة والمقعد المخصص 🚌:', rightX - 40, 456);
-  ctx.fillStyle = '#60a5fa';
-  ctx.font = '900 24px "Tajawal", sans-serif';
-  ctx.fillText(`أتوبيس (${student.busNumber})   |   مقعد #${student.seatNumber || 'حر'}`, rightX - 40, 496);
-
-  // Payment Box: x = 464, y = 426, w = 416, h = 95
-  drawRoundedRect(464, 426, 416, 95, 14);
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(52, 211, 153, 0.45)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  const paymentText = student.isFreeTicket
-    ? 'تذكرة ضيافة VIP 🎁'
-    : student.paymentStatus === 'paid'
-    ? 'خالص السداد بالكامل ✅'
-    : `عربون مسدد (${(student.paidAmount || 0).toLocaleString()} ج.م)`;
-
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('الموقف المالي والسداد 💳:', 860, 456);
-  ctx.fillStyle = '#34d399';
-  ctx.font = '900 22px "Tajawal", sans-serif';
-  ctx.fillText(paymentText, 860, 494);
-
-  // Row 3: Addons (T-shirt & Meal)
-  const mealInfo = getStudentMealInfo(student, settings);
-  const hasTshirt = Boolean(student.tshirtSize && student.tshirtSize !== 'none');
-  const hasMeal = Boolean(mealInfo.hasMeal);
-
-  if (hasTshirt || hasMeal) {
-    if (hasTshirt && hasMeal) {
-      // T-shirt box
-      drawRoundedRect(900, 535, 430, 80, 12);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(168, 85, 247, 0.45)';
-      ctx.stroke();
-      ctx.fillStyle = '#c084fc';
-      ctx.font = 'bold 18px "Tajawal", sans-serif';
-      ctx.fillText(`👕 تيشيرت الفعالية: مقاس (${student.tshirtSize || 'L'})`, rightX - 40, 582);
-
-      // Meal box
-      drawRoundedRect(464, 535, 416, 80, 12);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
-      ctx.stroke();
-      ctx.fillStyle = '#fde047';
-      ctx.font = 'bold 18px "Tajawal", sans-serif';
-      ctx.fillText(`🍔 وجبة الغداء: ${mealInfo.mealName}`, 860, 582);
-    } else if (hasTshirt) {
-      drawRoundedRect(464, 535, 866, 80, 12);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(168, 85, 247, 0.45)';
-      ctx.stroke();
-      ctx.fillStyle = '#c084fc';
-      ctx.font = 'bold 18px "Tajawal", sans-serif';
-      ctx.fillText(`👕 تيشيرت الفعالية: مقاس (${student.tshirtSize || 'L'})   [ مشمول بالحجز ✓ ]`, rightX - 40, 582);
-    } else {
-      drawRoundedRect(464, 535, 866, 80, 12);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
-      ctx.stroke();
-      ctx.fillStyle = '#fde047';
-      ctx.font = 'bold 18px "Tajawal", sans-serif';
-      ctx.fillText(`🍔 وجبة الغداء: ${mealInfo.mealName}   [ مشمولة بالحجز ✓ ]`, rightX - 40, 582);
-    }
-  }
-
-  // 8. Bottom Information Bar (Pickup, National ID, Emergency)
-  drawRoundedRect(444, 650, 906, 70, 14);
-  ctx.fillStyle = '#020617';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Pickup Location (Right)
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('📍 التجمع:', rightX - 20, 692);
-  ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 17px "Tajawal", sans-serif';
-  ctx.fillText(student.pickupPoint || settings.assemblyLocation || 'جامع الاستاد - كفرالشيخ', rightX - 95, 692);
-
-  // National ID (Center)
-  if (student.nationalId) {
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = 'bold 15px "Tajawal", sans-serif';
-    ctx.fillText('القومي:', 940, 692);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px monospace';
-    ctx.fillText(student.nationalId, 880, 692);
-  }
-
-  // Emergency Phone (Left)
-  ctx.fillStyle = '#f43f5e';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('📞 طوارئ:', 680, 692);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 16px monospace';
-  ctx.fillText(student.emergencyPhone || settings.supportPhone || '01006735016', 600, 692);
-
-  return canvas;
-};
-
-/**
- * Generate Student Digital Pass HTML Canvas (Renders an exact, pixel-perfect VIP Boarding Pass at standard fixed desktop width)
+ * Generate Student Digital Pass HTML Canvas (Captures exact standalone ticket pass only)
  */
 export const generateStudentTicketCanvas = async (
   student: Student,
   settings: TripSettings,
   elementId?: string
 ): Promise<HTMLCanvasElement | null> => {
-  // 1. Direct On-Screen DOM Element Capture (Guarantees 100% exact match to what the user sees)
-  if (elementId && typeof document !== 'undefined') {
-    const targetDomElem = document.getElementById(elementId);
-    if (targetDomElem) {
-      try {
-        if (document.fonts) {
-          await document.fonts.ready;
-        }
+  const targetId = elementId || `kayan-digital-ticket-${student.id}`;
+  const existingElement = document.getElementById(targetId);
 
-        // Wait for images inside target to load
-        const domImages = Array.from(targetDomElem.querySelectorAll('img'));
-        await Promise.all(
-          domImages.map(
-            (img) =>
-              new Promise((resolve) => {
-                if (img.complete) return resolve(true);
-                img.onload = () => resolve(true);
-                img.onerror = () => resolve(true);
-              })
-          )
-        );
-
-        const domCanvas = await html2canvas(targetDomElem, {
-          scale: 2, // Crisp HD 2x resolution (optimal for both mobile devices and high-DPI desktop displays without memory crashes)
-          backgroundColor: '#020617',
-          useCORS: true,
-          allowTaint: false,
-          logging: false,
-          scrollX: 0,
-          scrollY: 0,
-          onclone: (clonedDoc) => {
-            const clonedElem = clonedDoc.getElementById(elementId);
-            if (clonedElem) {
-              // Lock width to 700px so mobile phone viewports export the full desktop layout
-              clonedElem.style.width = '700px';
-              clonedElem.style.maxWidth = '700px';
-              clonedElem.style.minWidth = '700px';
-              clonedElem.style.margin = '0 auto';
-              clonedElem.style.boxSizing = 'border-box';
-
-              // Force desktop 2-column layout (8 cols details / 4 cols QR stub) even on mobile phone screens
-              const gridElem = clonedElem.querySelector('.ticket-main-grid') as HTMLElement;
-              if (gridElem) {
-                gridElem.style.display = 'grid';
-                gridElem.style.gridTemplateColumns = 'repeat(12, minmax(0, 1fr))';
-                gridElem.style.gap = '16px';
-                gridElem.style.alignItems = 'stretch';
-
-                if (gridElem.children.length >= 2) {
-                  const col8 = gridElem.children[0] as HTMLElement;
-                  if (col8) {
-                    col8.style.gridColumn = 'span 8 / span 8';
-                  }
-                  const col4 = gridElem.children[1] as HTMLElement;
-                  if (col4) {
-                    col4.style.gridColumn = 'span 4 / span 4';
-                  }
-                }
-              }
-            }
-            sanitizeClonedDoc(clonedDoc);
-          },
-        });
-
-        if (domCanvas && domCanvas.width > 0) {
-          return domCanvas;
-        }
-      } catch (domCaptureErr) {
-        console.warn('Direct DOM capture fallback to canvas generator:', domCaptureErr);
-      }
+  if (existingElement) {
+    try {
+      const canvas = await html2canvas(existingElement, {
+        scale: 3,
+        backgroundColor: '#090d16',
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        onclone: sanitizeClonedDoc,
+      });
+      if (canvas) return canvas;
+    } catch (err) {
+      console.warn('Could not capture existing DOM ticket element, fallback to standalone container:', err);
     }
   }
 
-  // 2. Pure High-Resolution 2D Canvas Generation (Instantaneous, 100% offline, immune to CSS/CORS issues)
-  try {
-    const canvas = await drawTicketPassToCanvas(student, settings);
-    if (canvas && canvas.width > 0) {
-      return canvas;
-    }
-  } catch (canvasErr) {
-    console.warn('Direct 2D canvas generation error, trying offscreen container:', canvasErr);
-  }
-
-  // 3. Offscreen Dedicated Container Fallback (used as ultimate legacy fallback)
+  // Fallback to standalone clean container rendering ONLY the ticket pass
   const container = document.createElement('div');
   container.style.position = 'fixed';
   container.style.left = '-9999px';
   container.style.top = '0';
-  container.style.width = '720px';
-  container.style.background = '#020617';
+  container.style.width = '700px';
+  container.style.background = '#090d16';
   container.style.color = '#f8fafc';
   container.style.direction = 'rtl';
-  container.style.fontFamily = "'Tajawal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-  container.style.padding = '0';
-  container.style.margin = '0';
+  container.style.fontFamily = "'Tajawal', -apple-system, sans-serif";
+  container.style.padding = '20px';
   container.style.boxSizing = 'border-box';
-  container.style.zIndex = '-9999';
 
-  // 1. Generate QR Code locally via offline Canvas/DataURL with zero network lag or CORS failures
-  let qrDataUrl = '';
-  try {
-    const qrPayload = JSON.stringify({
+  const qrData = encodeURIComponent(
+    JSON.stringify({
       ticket: student.ticketCode,
       name: student.name,
       bus: student.busNumber,
@@ -1663,54 +914,32 @@ export const generateStudentTicketCanvas = async (
       phone: student.phone,
       pickup: student.pickupPoint || '',
       status: student.paymentStatus,
-    });
-    qrDataUrl = await QRCode.toDataURL(qrPayload, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 280,
-      color: {
-        dark: '#020617',
-        light: '#ffffff',
-      },
-    });
-  } catch (qrErr) {
-    console.warn('Local QRCode fallback error:', qrErr);
-    const qrData = encodeURIComponent(
-      JSON.stringify({
-        ticket: student.ticketCode,
-        name: student.name,
-        bus: student.busNumber,
-        seat: student.seatNumber || 'N/A',
-        phone: student.phone,
-      })
-    );
-    qrDataUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${qrData}`;
-  }
+    })
+  );
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${qrData}`;
 
-  const formattedDate = formatTripDateSafely(settings.tripDate);
+  const formattedDate = settings.tripDate
+    ? new Date(settings.tripDate).toLocaleDateString('ar-EG', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      })
+    : settings.tripDate || 'سيتم التحديد لاحقاً';
 
   const paymentText =
     student.isFreeTicket
       ? 'تذكرة مجانية VIP 🎁'
       : student.paymentStatus === 'paid'
-      ? 'خالص السداد بالكامل ✅'
+      ? 'خالص السداد ✅'
       : `عربون (${(student.paidAmount || 0).toLocaleString()} ج.م)`;
 
   const selectedAddonsList = (settings.addons || []).filter((a) => (student.selectedAddonIds || []).includes(a.id));
 
-  // Inline SVG icons with fixed geometries to eliminate any icon-dropping or text-misalignment bugs
-  const busSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><path d="M8 6v6"/><path d="M15 6v6"/><path d="M2 12h19.6"/><path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2V6c0-1.7-1.3-3-3-3H4C2.3 3 1 4.3 1 6v8c0 .4.1.8.2 1.2l.8 2.8h3"/><circle cx="7" cy="18" r="2"/><path d="M9 18h5"/><circle cx="16" cy="18" r="2"/></svg>`;
-  const walletSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>`;
-  const shirtSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>`;
-  const mealSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><path d="m18 15-2 2a4 4 0 0 1-6 0l-2-2"/><path d="m15 11 1 1a2 2 0 0 1 0 3l-1 1"/><path d="m9 11-1 1a2 2 0 0 0 0 3l1 1"/><circle cx="12" cy="7" r="4"/></svg>`;
-  const pinSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`;
-  const phoneSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`;
-  const checkSvg = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>`;
-
   container.innerHTML = `
-    <div style="width: 820px; box-sizing: border-box; position: relative; background: linear-gradient(135deg, #020617 0%, #0f172a 45%, #1e1b4b 100%); border: 2.5px solid #f59e0b; border-radius: 28px; padding: 24px 28px; box-shadow: 0 25px 60px rgba(0,0,0,0.85); overflow: hidden; direction: rtl; font-family: 'Tajawal', sans-serif;">
+    <div style="position: relative; background: linear-gradient(135deg, #020617 0%, #0f172a 45%, #1e1b4b 100%); border: 2px solid #f59e0b; border-radius: 24px; padding: 24px 28px; box-shadow: 0 25px 60px rgba(0,0,0,0.85); overflow: hidden; direction: rtl; font-family: 'Tajawal', sans-serif;">
       <!-- Scalloped Notched Edges on Left and Right -->
-      <div style="position: absolute; left: -8px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 16px 0; z-index: 30; pointer-events: none;">
+      <div style="position: absolute; left: -8px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 14px 0; z-index: 30; pointer-events: none;">
         <div style="width: 14px; height: 14px; border-radius: 50%; background: #090d16; border: 1px solid rgba(245, 158, 11, 0.5);"></div>
         <div style="width: 14px; height: 14px; border-radius: 50%; background: #090d16; border: 1px solid rgba(245, 158, 11, 0.5);"></div>
         <div style="width: 14px; height: 14px; border-radius: 50%; background: #090d16; border: 1px solid rgba(245, 158, 11, 0.5);"></div>
@@ -1718,7 +947,7 @@ export const generateStudentTicketCanvas = async (
         <div style="width: 14px; height: 14px; border-radius: 50%; background: #090d16; border: 1px solid rgba(245, 158, 11, 0.5);"></div>
       </div>
 
-      <div style="position: absolute; right: -8px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 16px 0; z-index: 30; pointer-events: none;">
+      <div style="position: absolute; right: -8px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 14px 0; z-index: 30; pointer-events: none;">
         <div style="width: 14px; height: 14px; border-radius: 50%; background: #090d16; border: 1px solid rgba(245, 158, 11, 0.5);"></div>
         <div style="width: 14px; height: 14px; border-radius: 50%; background: #090d16; border: 1px solid rgba(245, 158, 11, 0.5);"></div>
         <div style="width: 14px; height: 14px; border-radius: 50%; background: #090d16; border: 1px solid rgba(245, 158, 11, 0.5);"></div>
@@ -1731,69 +960,68 @@ export const generateStudentTicketCanvas = async (
       <div style="position: absolute; right: -16px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 50%; background: #090d16; border-left: 2px solid rgba(245, 158, 11, 0.8); z-index: 30;"></div>
 
       <!-- Top Header Logo & Company Info -->
-      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(245, 158, 11, 0.35); padding-bottom: 12px; margin-bottom: 12px; box-sizing: border-box;">
-        <!-- Right: Circular Logo Badge & Company Title -->
-        <div style="display: flex; align-items: center; gap: 14px;">
-          <div style="position: relative; width: 54px; height: 54px; flex-shrink: 0;">
-            <img src="${cachedKayanBadgeBase64}" width="54" height="54" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #fde047; object-fit: cover; display: block; box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);" />
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(245, 158, 11, 0.35); padding-bottom: 12px; margin-bottom: 12px;">
+        <!-- Right: Circular Logo Badge & Company Title (In RTL: right side) -->
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="position: relative;">
+            <img src="${kayanBadge}" width="52" height="52" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #fde047; object-fit: cover; display: block; box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);" />
           </div>
           <div style="text-align: right;">
             <div style="display: flex; align-items: center; gap: 8px;">
-              <div style="font-size: 17px; font-weight: 900; color: #fde047; font-family: 'Tajawal', sans-serif; line-height: 1.3;">
+              <div style="font-size: 16px; font-weight: 900; color: #fde047; font-family: 'Tajawal', sans-serif;">
                 ${settings.companyNameAr || 'شركة كيان لتنظيم رحلات الـ Fun Day'}
               </div>
-              <div style="background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.5); font-size: 11px; padding: 2px 8px; border-radius: 6px; font-weight: 800; display: inline-flex; align-items: center; gap: 4px; line-height: 1.2;">
-                ${checkSvg} معتمدة
-              </div>
+              <span style="background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.5); font-size: 10px; padding: 2px 8px; border-radius: 6px; font-weight: 800;">
+                معتمدة ✓
+              </span>
             </div>
-            <div style="font-size: 11px; color: #94a3b8; margin-top: 3px; font-family: 'Tajawal', sans-serif; line-height: 1.2;">
+            <div style="font-size: 10px; color: #94a3b8; margin-top: 3px; font-family: 'Tajawal', sans-serif;">
               تذكرة صعود رقمية رسمية • OFFICIAL BOARDING PASS
             </div>
           </div>
         </div>
 
-        <!-- Left: Golden Ticket Code Pill -->
+        <!-- Left: Golden Ticket Code Pill (In RTL: left side) -->
         <div style="text-align: left;">
-          <div style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(217, 119, 6, 0.35) 100%); color: #fde047; border: 1.5px solid rgba(245, 158, 11, 0.7); font-size: 15px; font-weight: 900; font-family: monospace; padding: 6px 18px; border-radius: 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.2); text-align: center; line-height: 1.3;">
-            <div style="font-size: 9.5px; color: rgba(253, 224, 71, 0.9); font-family: 'Tajawal', sans-serif; margin-bottom: 2px;">كود التذكرة</div>
+          <div style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(217, 119, 6, 0.35) 100%); color: #fde047; border: 1.5px solid rgba(245, 158, 11, 0.7); font-size: 14px; font-weight: 900; font-family: monospace; padding: 4px 14px; border-radius: 12px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.2); text-align: center;">
+            <div style="font-size: 8px; color: rgba(253, 224, 71, 0.8); font-family: 'Tajawal', sans-serif;">كود التذكرة</div>
             #${student.ticketCode}
           </div>
         </div>
       </div>
 
       <!-- KAYAN Official Promotional Brand Banner -->
-      <div style="position: relative; margin-bottom: 12px; border-radius: 16px; overflow: hidden; border: 1px solid rgba(245, 158, 11, 0.45); height: 95px; background: #020617; box-sizing: border-box;">
-        <img src="${cachedKayanLogoBase64}" style="width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; opacity: 0.95;" alt="KAYAN Banner" />
-        <div style="position: absolute; inset: 0; background: linear-gradient(0deg, rgba(2,6,23,0.85) 0%, rgba(2,6,23,0.1) 50%, rgba(2,6,23,0.4) 100%); pointer-events: none;"></div>
+      <div style="position: relative; margin-bottom: 14px; border-radius: 16px; overflow: hidden; border: 1px solid rgba(245, 158, 11, 0.45); height: 95px; background: #020617;">
+        <img src="${kayanLogo}" style="width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; opacity: 0.95;" alt="KAYAN Banner" />
+        <div style="position: absolute; inset: 0; background: linear-gradient(0deg, rgba(2,6,23,0.9) 0%, rgba(2,6,23,0.1) 50%, rgba(2,6,23,0.4) 100%); pointer-events: none;"></div>
         
-        <div style="position: absolute; top: 10px; right: 14px; left: 14px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; box-sizing: border-box; z-index: 10;">
-          <div style="background: rgba(2, 6, 23, 0.94); color: #fde047; border: 1px solid rgba(245, 158, 11, 0.65); font-size: 11.5px; font-weight: 900; padding: 6px 14px; border-radius: 12px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); box-sizing: border-box;">
-            <span style="font-size: 11px;">✨</span>
-            <span>${settings.tripName || 'fun day نظم الشريف 2027'}</span>
-          </div>
-          <div style="background: rgba(2, 6, 23, 0.94); color: #e2e8f0; border: 1px solid rgba(245, 158, 11, 0.5); font-size: 11px; font-family: monospace; font-weight: 800; padding: 6px 14px; border-radius: 10px; letter-spacing: 0.5px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.5); box-sizing: border-box;">
+        <div style="position: absolute; bottom: 8px; right: 12px; left: 12px; display: flex; justify-content: space-between; align-items: center; pointer-events: none;">
+          <span style="background: rgba(2,6,23,0.85); color: #fde047; border: 1px solid rgba(245, 158, 11, 0.5); font-size: 11px; font-weight: 900; padding: 4px 12px; border-radius: 10px;">
+            ✨ ${settings.tripName || 'رحلات وفاعليات كيان الرسمية'}
+          </span>
+          <span style="background: rgba(2,6,23,0.85); color: #cbd5e1; border: 1px solid #334155; font-size: 10px; font-family: monospace; padding: 4px 10px; border-radius: 8px; letter-spacing: 1px;">
             KAYAN TOURS & EVENTS
-          </div>
+          </span>
         </div>
       </div>
 
       <!-- Main Content Grid: Main Details (Right in RTL) + Stub (Left in RTL) -->
-      <div style="display: flex; gap: 16px; align-items: stretch; direction: rtl; box-sizing: border-box;">
+      <div style="display: flex; gap: 16px; align-items: stretch; direction: rtl;">
         <!-- Right Section: Student & Trip Details -->
-        <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-between; text-align: right; box-sizing: border-box;">
+        <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-between; text-align: right;">
           <!-- Student Header -->
-          <div style="margin-bottom: 8px; box-sizing: border-box;">
+          <div style="margin-bottom: 8px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-              <span style="font-size: 12px; color: #94a3b8; font-weight: 600;">المسافر:</span>
-              <span style="font-size: 12px; color: #94a3b8; font-family: monospace;">هاتف: <strong style="color: #e2e8f0;">${student.phone}</strong></span>
+              <span style="font-size: 11px; color: #94a3b8; font-weight: 600;">المسافر:</span>
+              <span style="font-size: 11px; color: #94a3b8; font-family: monospace;">هاتف: <strong style="color: #e2e8f0;">${student.phone}</strong></span>
             </div>
-            <div style="font-size: 25px; font-weight: 900; color: #ffffff; margin-top: 1px; line-height: 1.25; font-family: 'Tajawal', sans-serif;">
+            <div style="font-size: 24px; font-weight: 900; color: #ffffff; margin-top: 1px; line-height: 1.2; font-family: 'Tajawal', sans-serif;">
               ${student.name}
             </div>
             ${
               student.faculty || student.customRole
                 ? `
-            <div style="font-size: 12.5px; color: #fde047; font-weight: 700; margin-top: 2px; line-height: 1.3;">
+            <div style="font-size: 13px; color: #fde047; font-weight: 700; margin-top: 2px;">
               ${student.faculty ? student.faculty : ''}
               ${student.customRole ? ` • <span style="color: #67e8f9;">${student.customRole}</span>` : ''}
             </div>
@@ -1803,48 +1031,42 @@ export const generateStudentTicketCanvas = async (
           </div>
 
           <!-- Outer Logistics Box -->
-          <div style="background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(51, 65, 85, 0.9); border-radius: 16px; padding: 10px 14px; margin-bottom: 8px; box-sizing: border-box;">
+          <div style="background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(51, 65, 85, 0.9); border-radius: 16px; padding: 12px; margin-bottom: 10px;">
             <!-- Row 1: Trip & Date -->
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; box-sizing: border-box;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid #1e293b;">
               <!-- Trip & Destination -->
               <div>
-                <span style="color: #94a3b8; font-size: 10.5px; display: block; line-height: 1.2;">الرحلة والوجهة:</span>
-                <strong style="color: #fde047; font-size: 13.5px; font-weight: 900; display: block; margin-top: 2px; line-height: 1.3;">${settings.tripName}</strong>
-                ${settings.destination ? `<span style="color: #cbd5e1; font-size: 11.5px; display: block; margin-top: 2px; line-height: 1.2;">${settings.destination}</span>` : ''}
+                <span style="color: #94a3b8; font-size: 10px; display: block;">الرحلة والوجهة:</span>
+                <strong style="color: #fde047; font-size: 13px; font-weight: 900; display: block; margin-top: 2px;">${settings.tripName}</strong>
+                ${settings.destination ? `<span style="color: #cbd5e1; font-size: 11px; display: block; margin-top: 2px;">${settings.destination}</span>` : ''}
               </div>
 
               <!-- Date & Time -->
               <div>
-                <span style="color: #94a3b8; font-size: 10.5px; display: block; line-height: 1.2;">تاريخ وتوقيت الرحلة:</span>
-                <strong style="color: #ffffff; font-size: 13.5px; font-weight: 800; display: block; margin-top: 2px; line-height: 1.3;">${formattedDate}</strong>
-                ${student.departureTime ? `<span style="color: #34d399; font-size: 11.5px; font-weight: 700; display: block; margin-top: 2px; line-height: 1.2;">${student.departureTime}</span>` : ''}
+                <span style="color: #94a3b8; font-size: 10px; display: block;">تاريخ وتوقيت الرحلة:</span>
+                <strong style="color: #ffffff; font-size: 13px; font-weight: 800; display: block; margin-top: 2px;">${formattedDate}</strong>
+                ${student.departureTime ? `<span style="color: #34d399; font-size: 11px; font-weight: 700; display: block; margin-top: 2px;">${student.departureTime}</span>` : ''}
               </div>
             </div>
 
             <!-- Row 2: Sub-pills (Bus/Seat & Financial/Payment Status) -->
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding-top: 8px; box-sizing: border-box;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding-top: 10px;">
               <!-- Bus & Seat Pill -->
-              <div style="background: rgba(30, 27, 75, 0.85); border: 1px solid rgba(99, 102, 241, 0.45); border-radius: 12px; padding: 8px 12px; box-sizing: border-box;">
-                <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
-                  ${busSvg}
-                  <span style="color: #94a3b8; font-size: 10.5px; font-weight: 700; line-height: 1.2;">الحافلة والمقعد:</span>
-                </div>
-                <strong style="color: #ffffff; font-size: 13.5px; font-weight: 900; display: block; margin-top: 2px; line-height: 1.3;">أتوبيس (${student.busNumber})</strong>
-                <span style="color: #fde047; font-size: 12px; font-weight: 800; display: block; margin-top: 2px; line-height: 1.2;">${student.seatNumber ? `مقعد رقم ${student.seatNumber}` : 'مقعد حر'}</span>
+              <div style="background: rgba(30, 27, 75, 0.85); border: 1px solid rgba(99, 102, 241, 0.45); border-radius: 12px; padding: 8px 12px;">
+                <span style="color: #94a3b8; font-size: 10px; display: block; font-weight: 700;">الحافلة والمقعد 🚌:</span>
+                <strong style="color: #ffffff; font-size: 13px; font-weight: 900; display: block; margin-top: 2px;">أتوبيس (${student.busNumber})</strong>
+                <span style="color: #fde047; font-size: 12px; font-weight: 800; display: block; margin-top: 2px;">${student.seatNumber ? `مقعد رقم ${student.seatNumber}` : 'مقعد حر'}</span>
               </div>
 
               <!-- Financial Payment Status Pill -->
-              <div style="background: rgba(30, 27, 75, 0.85); border: 1px solid rgba(99, 102, 241, 0.45); border-radius: 12px; padding: 8px 12px; box-sizing: border-box;">
-                <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
-                  ${walletSvg}
-                  <span style="color: #94a3b8; font-size: 10.5px; font-weight: 700; line-height: 1.2;">الموقف المالي والسداد:</span>
-                </div>
-                <strong style="color: #34d399; font-size: 13.5px; font-weight: 900; display: block; margin-top: 2px; line-height: 1.3;">${paymentText}</strong>
-                <span style="color: #cbd5e1; font-size: 11px; font-weight: 600; display: block; margin-top: 2px; line-height: 1.2;">${student.isFreeTicket ? 'تذكرة ضيافة VIP' : student.remainingAmount > 0 ? `متبقي: ${student.remainingAmount.toLocaleString()} ج.م` : 'كامل الرسوم مسددة'}</span>
+              <div style="background: rgba(30, 27, 75, 0.85); border: 1px solid rgba(99, 102, 241, 0.45); border-radius: 12px; padding: 8px 12px;">
+                <span style="color: #94a3b8; font-size: 10px; display: block; font-weight: 700;">الموقف المالي والسداد 💳:</span>
+                <strong style="color: #34d399; font-size: 13px; font-weight: 900; display: block; margin-top: 2px;">${paymentText}</strong>
+                <span style="color: #cbd5e1; font-size: 11px; font-weight: 600; display: block; margin-top: 2px;">${student.isFreeTicket ? 'تذكرة ضيافة VIP' : student.remainingAmount > 0 ? `متبقي: ${student.remainingAmount.toLocaleString()} ج.م` : 'كامل الرسوم مسددة'}</span>
               </div>
             </div>
 
-            <!-- Row 3: Dynamic Tshirt and Meal Cards -->
+            <!-- Row 3: Dynamic Tshirt 👕 and Meal 🍔 Cards (Only rendered if actually included/selected) -->
             ${(() => {
               const mealInfo = getStudentMealInfo(student, settings);
               const hasTshirt = Boolean(
@@ -1859,24 +1081,24 @@ export const generateStudentTicketCanvas = async (
               const gridTemplate = isTwoCols ? 'grid-template-columns: 1fr 1fr;' : 'grid-template-columns: 1fr;';
 
               return `
-                <div style="display: grid; ${gridTemplate} gap: 10px; margin-top: 8px; box-sizing: border-box;">
+                <div style="display: grid; ${gridTemplate} gap: 10px; margin-top: 8px;">
                   ${
                     hasTshirt
                       ? `
                     <!-- Tshirt Status Box -->
-                    <div style="background: rgba(2, 6, 23, 0.85); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 12px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; box-sizing: border-box;">
-                      <div style="display: flex; align-items: center; gap: 8px;">
-                        ${shirtSvg}
+                    <div style="background: rgba(2, 6, 23, 0.85); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 12px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
+                      <div style="display: flex; align-items: center; gap: 6px;">
+                        <span style="font-size: 14px;">👕</span>
                         <div>
-                          <span style="color: #94a3b8; font-size: 10px; display: block; line-height: 1.2;">تيشيرت الفعالية:</span>
-                          <strong style="color: #d8b4fe; font-weight: 900; font-size: 12px; line-height: 1.3;">
+                          <span style="color: #94a3b8; font-size: 9.5px; display: block;">تيشيرت الفعالية:</span>
+                          <strong style="color: #d8b4fe; font-weight: 900; font-size: 11.5px;">
                             مقاس (${student.tshirtSize || 'L'})
                           </strong>
                         </div>
                       </div>
                       <div>
-                        <span style="background: rgba(168, 85, 247, 0.2); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.5); font-size: 9.5px; padding: 3px 8px; border-radius: 5px; font-weight: 800; line-height: 1.2;">
-                          ${student.tshirtReceived ? 'تم الاستلام ✓' : 'مشمول بالحجز 🎫'}
+                        <span style="background: rgba(168, 85, 247, 0.2); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.5); font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 800;">
+                          ${student.tshirtReceived ? '✅ تم الاستلام' : 'مشمول بالحجز 🎫'}
                         </span>
                       </div>
                     </div>
@@ -1888,19 +1110,19 @@ export const generateStudentTicketCanvas = async (
                     hasMeal
                       ? `
                     <!-- Meal Status Box -->
-                    <div style="background: rgba(2, 6, 23, 0.85); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 12px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; box-sizing: border-box;">
-                      <div style="display: flex; align-items: center; gap: 8px;">
-                        ${mealSvg}
+                    <div style="background: rgba(2, 6, 23, 0.85); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 12px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
+                      <div style="display: flex; align-items: center; gap: 6px;">
+                        <span style="font-size: 14px;">🍔</span>
                         <div>
-                          <span style="color: #94a3b8; font-size: 10px; display: block; line-height: 1.2;">وجبة الغداء:</span>
-                          <strong style="color: #fde047; font-weight: 900; font-size: 12px; line-height: 1.3;">
+                          <span style="color: #94a3b8; font-size: 9.5px; display: block;">وجبة الغداء:</span>
+                          <strong style="color: #fde047; font-weight: 900; font-size: 11.5px;">
                             ${mealInfo.mealName}
                           </strong>
                         </div>
                       </div>
                       <div>
-                        <span style="background: rgba(245, 158, 11, 0.2); color: #fde047; border: 1px solid rgba(245, 158, 11, 0.5); font-size: 9.5px; padding: 3px 8px; border-radius: 5px; font-weight: 800; white-space: nowrap; line-height: 1.2;">
-                          ${student.mealReceived ? 'تم الاستلام ✓' : 'مشمولة بالحجز 🎫'}
+                        <span style="background: rgba(245, 158, 11, 0.2); color: #fde047; border: 1px solid rgba(245, 158, 11, 0.5); font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 800; white-space: nowrap;">
+                          ${student.mealReceived ? '✅ تم الاستلام' : 'مشمولة بالحجز 🎫'}
                         </span>
                       </div>
                     </div>
@@ -1911,32 +1133,26 @@ export const generateStudentTicketCanvas = async (
               `;
             })()}
 
-            <!-- Extra Addons -->
+            <!-- Optional Extra Unique Addons if selected -->
             ${(() => {
-              const uniqueOtherAddons = selectedAddonsList.filter((a) => {
-                const name = (a.name || '').toLowerCase();
-                return (
-                  !name.includes('وجب') &&
-                  !name.includes('غداء') &&
-                  !name.includes('عشاء') &&
-                  !name.includes('فطار') &&
-                  !name.includes('تيشرت') &&
-                  !name.includes('تي شيرت') &&
-                  !name.includes('هود') &&
-                  !name.includes('hoodie') &&
-                  !name.includes('سويت')
-                );
-              });
+              const uniqueOtherAddons = selectedAddonsList.filter(
+                (a) =>
+                  !a.name.includes('وجب') &&
+                  !a.name.includes('وجبة') &&
+                  !a.name.includes('غداء') &&
+                  !a.name.includes('تيشرت') &&
+                  !a.name.includes('تي شيرت')
+              );
 
               if (uniqueOtherAddons.length === 0) return '';
 
               return `
-              <div style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed #1e293b; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; box-sizing: border-box;">
-                <span style="color: #a5b4fc; font-size: 10.5px; font-weight: 700;">⚡ الخدمات المخصصة:</span>
+              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed #1e293b; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+                <span style="color: #a5b4fc; font-size: 10px; font-weight: 700;">⚡ الإضافات والخدمات المخصصة:</span>
                 ${uniqueOtherAddons
                   .map(
                     (a) =>
-                      `<span style="background: rgba(99, 102, 241, 0.2); color: #c7d2fe; border: 1px solid rgba(99, 102, 241, 0.4); font-size: 10px; padding: 2px 7px; border-radius: 4px; font-weight: 700; line-height: 1.2;">✓ ${a.name}</span>`
+                      `<span style="background: rgba(99, 102, 241, 0.2); color: #c7d2fe; border: 1px solid rgba(99, 102, 241, 0.4); font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 700;">✓ ${a.name}</span>`
                   )
                   .join('')}
               </div>
@@ -1947,7 +1163,7 @@ export const generateStudentTicketCanvas = async (
             ${
               student.hasCompanion && student.companionName
                 ? `
-              <div style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed #1e293b; font-size: 11.5px; color: #cbd5e1; display: flex; justify-content: space-between; box-sizing: border-box;">
+              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed #1e293b; font-size: 11px; color: #cbd5e1; display: flex; justify-content: space-between;">
                 <span>👥 مرافق الحجز: <strong style="color: #ffffff;">${student.companionName}</strong></span>
                 <span style="color: #fde047;">${student.companionSeatNumber ? `مقعد #${student.companionSeatNumber}` : ''} (${student.companionTShirtSize || 'L'})</span>
               </div>
@@ -1957,54 +1173,73 @@ export const generateStudentTicketCanvas = async (
           </div>
 
           <!-- Full-Width Bottom Bar with Pickup, National ID & Emergency -->
-          <div style="background: #020617; border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 12px; padding: 8px 14px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; flex-wrap: wrap; gap: 8px; box-sizing: border-box;">
-            <div style="color: #cbd5e1; display: flex; align-items: center; gap: 6px; line-height: 1;">
-              ${pinSvg}
-              <span style="color: #94a3b8; font-weight: 700;">التجمع:</span>
-              <strong style="color: #fde047; font-weight: 800;">${student.pickupPoint || settings.assemblyLocation || 'جامع الاستاد - كفرالشيخ'}</strong>
+          ${
+            Boolean(student.pickupPoint || student.nationalId || student.emergencyPhone)
+              ? `
+          <div style="background: #020617; border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 12px; padding: 8px 14px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; flex-wrap: wrap; gap: 8px;">
+            ${
+              student.pickupPoint
+                ? `
+            <div style="color: #cbd5e1; display: flex; align-items: center; gap: 4px;">
+              <span>📍 التجمع:</span>
+              <strong style="color: #fde047;">${student.pickupPoint}</strong>
             </div>
+            `
+                : `
+            <div style="color: #94a3b8; font-family: monospace; font-size: 11px;">
+              KYN-${student.ticketCode}
+            </div>
+            `
+            }
 
-            <div style="display: flex; align-items: center; gap: 14px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
               ${
                 student.nationalId
                   ? `
-                <div style="color: #cbd5e1; display: flex; align-items: center; gap: 5px; line-height: 1;">
-                  <span style="background: #2563eb; color: white; padding: 2px 5px; border-radius: 4px; font-size: 9px; font-weight: 900; line-height: 1; display: inline-block; vertical-align: middle;">ID</span>
-                  <span style="color: #94a3b8; font-weight: 700; font-family: 'Tajawal', sans-serif;">القومي:</span>
-                  <strong style="color: #ffffff; font-family: monospace; font-size: 11px; font-weight: 700;" dir="ltr">${student.nationalId}</strong>
+                <div style="color: #cbd5e1; font-family: monospace; display: flex; align-items: center; gap: 4px;">
+                  <span style="background: #3b82f6; color: white; padding: 1px 4px; border-radius: 4px; font-size: 9px; font-weight: 900;">ID</span>
+                  <span>القومي:</span>
+                  <strong style="color: #ffffff;">${student.nationalId}</strong>
                 </div>
               `
                   : ''
               }
 
-              <div style="color: #cbd5e1; display: flex; align-items: center; gap: 5px; line-height: 1;">
-                ${phoneSvg}
-                <span style="color: #f43f5e; font-weight: 800; font-family: 'Tajawal', sans-serif;">طوارئ:</span>
-                <strong style="color: #ffffff; font-family: monospace; font-size: 11px; font-weight: 700;" dir="ltr">${student.emergencyPhone || settings.supportPhone || '01006735016'}</strong>
-              </div>
+              ${
+                student.emergencyPhone
+                  ? `
+                <div style="color: #cbd5e1; font-family: monospace; display: flex; align-items: center; gap: 4px;">
+                  <span style="color: #f43f5e;">📞 طوارئ:</span>
+                  <strong style="color: #ffffff;">${student.emergencyPhone}</strong>
+                </div>
+              `
+                  : ''
+              }
             </div>
           </div>
+          `
+              : ''
+          }
         </div>
 
         <!-- Left Section: White QR Code Box & Barcode Graphic (Verification Stub) -->
-        <div style="width: 215px; background: rgba(15, 23, 42, 0.75); border-radius: 20px; padding: 14px; border: 2px dashed rgba(245, 158, 11, 0.45); display: flex; flex-direction: column; align-items: center; justify-content: space-between; text-align: center; box-sizing: border-box; flex-shrink: 0;">
+        <div style="width: 180px; background: rgba(15, 23, 42, 0.7); border-radius: 18px; padding: 12px; border: 2px dashed rgba(245, 158, 11, 0.45); display: flex; flex-direction: column; align-items: center; justify-content: space-between; text-align: center;">
           <!-- White QR Box -->
-          <div style="background: #ffffff; padding: 10px; border-radius: 16px; border: 2px solid #f59e0b; box-shadow: 0 8px 20px rgba(0,0,0,0.5); text-align: center; width: 100%; box-sizing: border-box;">
-            <img src="${qrDataUrl}" width="155" height="155" alt="QR Code" style="display: block; margin: 0 auto; width: 155px; height: 155px; border-radius: 6px;" />
-            <div style="font-size: 13px; font-weight: 900; font-family: monospace; color: #020617; margin-top: 6px; line-height: 1.2;">
+          <div style="background: #ffffff; padding: 8px; border-radius: 14px; border: 2px solid #f59e0b; box-shadow: 0 8px 20px rgba(0,0,0,0.5); text-align: center; width: 100%; box-sizing: border-box;">
+            <img src="${qrUrl}" width="125" height="125" alt="QR Code" style="display: block; margin: 0 auto;" />
+            <div style="font-size: 11px; font-weight: 900; font-family: monospace; color: #020617; margin-top: 4px;">
               KYN - ${student.ticketCode}
             </div>
           </div>
 
           <!-- Official Verification Tag -->
-          <div style="font-size: 11.5px; color: #34d399; font-weight: 800; margin: 6px 0; display: flex; align-items: center; justify-content: center; gap: 4px; line-height: 1.2;">
-            ${checkSvg}
-            <span>تذكرة صعود إلكترونية معتمدة</span>
+          <div style="font-size: 11px; color: #34d399; font-weight: 800; margin: 4px 0;">
+            ✓ تذكرة صعود إلكترونية معتمدة
           </div>
 
           <!-- Barcode Graphic Strip -->
-          <div style="width: 100%; background: #020617; border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 10px; padding: 8px 6px; text-align: center; box-sizing: border-box;">
-            <div style="display: flex; justify-content: center; align-items: center; gap: 2px; height: 22px; overflow: hidden;">
+          <div style="width: 100%; background: #020617; border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 6px 4px; text-align: center;">
+            <div style="display: flex; justify-content: center; align-items: center; gap: 2px; height: 18px;">
               <div style="width: 2px; height: 100%; background: #f8fafc;"></div>
               <div style="width: 4px; height: 100%; background: #f8fafc;"></div>
               <div style="width: 1px; height: 100%; background: #f8fafc;"></div>
@@ -2034,53 +1269,17 @@ export const generateStudentTicketCanvas = async (
   document.body.appendChild(container);
 
   try {
-    // Wait for fonts and all images inside container to finish loading completely
-    if (document.fonts) {
-      await document.fonts.ready;
-    }
-    const images = Array.from(container.querySelectorAll('img'));
-    await Promise.all(
-      images.map(
-        (img) =>
-          new Promise((resolve) => {
-            if (img.complete) return resolve(true);
-            img.onload = () => resolve(true);
-            img.onerror = () => resolve(true);
-          })
-      )
-    );
-
     const canvas = await html2canvas(container, {
-      scale: 3, // Ultra-sharp 3x desktop rendering
-      windowWidth: 1280, // Guarantee desktop layout irrespective of mobile viewport
+      scale: 3,
       backgroundColor: '#090d16',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
-      scrollX: 0,
-      scrollY: 0,
       onclone: sanitizeClonedDoc,
     });
     return canvas;
   } catch (err) {
-    console.error('Error generating standalone ticket canvas, trying live DOM fallback:', err);
-    
-    // Fallback: Try capturing directly from mounted DOM element if available
-    const domTarget = elementId ? document.getElementById(elementId) : document.getElementById(`kayan-digital-ticket-${student.id}`);
-    if (domTarget) {
-      try {
-        const domCanvas = await html2canvas(domTarget, {
-          scale: 2.5,
-          backgroundColor: '#090d16',
-          useCORS: true,
-          logging: false,
-          onclone: sanitizeClonedDoc,
-        });
-        return domCanvas;
-      } catch (domErr) {
-        console.error('DOM fallback canvas also failed:', domErr);
-      }
-    }
+    console.error('Error generating fallback ticket canvas:', err);
     return null;
   } finally {
     if (document.body.contains(container)) {
@@ -2097,11 +1296,10 @@ export const generateStudentTicketPDFBlob = async (
   settings: TripSettings,
   elementId?: string
 ): Promise<{ blob: Blob; file: File; filename: string } | null> => {
-  const safeName = (student.name || 'طالب').replace(/[^\w\u0600-\u06FF]/g, '_');
-  const filename = `KAYAN_Ticket_${student.ticketCode}_${safeName}.pdf`;
+  const filename = `KAYAN_Ticket_${student.ticketCode}_${student.name}.pdf`;
 
   const canvas = await generateStudentTicketCanvas(student, settings, elementId);
-  if (!canvas || canvas.width === 0) return null;
+  if (!canvas) return null;
 
   try {
     const imgData = canvas.toDataURL('image/png');
@@ -2147,7 +1345,14 @@ export const generateStudentTicketPDF = async (
 ) => {
   const result = await generateStudentTicketPDFBlob(student, settings, elementId);
   if (result) {
-    triggerFileDownload(result.blob, result.filename);
+    const url = URL.createObjectURL(result.blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = result.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 };
 
@@ -2159,36 +1364,50 @@ export const exportTicketAsHighResImage = async (
   settings: TripSettings,
   elementId?: string
 ): Promise<{ success: boolean; filename: string; blob?: Blob; dataUrl?: string }> => {
-  const safeName = (student.name || 'طالب').replace(/[^\w\u0600-\u06FF]/g, '_');
-  const filename = `KAYAN_Ticket_${student.ticketCode}_${safeName}.png`;
+  const filename = `KAYAN_Ticket_${student.ticketCode}_${student.name}.png`;
 
   try {
     const canvas = await generateStudentTicketCanvas(student, settings, elementId);
-    if (!canvas || canvas.width === 0) {
+    if (!canvas) {
       return { success: false, filename };
     }
 
-    // Direct Blob creation is lightweight and avoids massive memory spikes on mobile
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob((b) => resolve(b), 'image/png', 0.95);
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = filename;
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+
+          setTimeout(() => {
+            if (document.body.contains(link)) {
+              document.body.removeChild(link);
+            }
+            URL.revokeObjectURL(url);
+          }, 3000);
+
+          resolve({
+            success: true,
+            filename,
+            blob,
+            dataUrl: canvas.toDataURL('image/png'),
+          });
+        } else {
+          const dataUrl = canvas.toDataURL('image/png');
+          const link = document.createElement('a');
+          link.href = dataUrl;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          resolve({ success: true, filename, dataUrl });
+        }
+      }, 'image/png', 1.0);
     });
-
-    if (!blob) {
-      return { success: false, filename };
-    }
-
-    // Trigger download with Blob (which handles Web Share on mobile or safe link download on desktop)
-    triggerFileDownload(blob, filename);
-
-    // Create a local object URL
-    const objectUrl = URL.createObjectURL(blob);
-
-    return {
-      success: true,
-      filename,
-      blob,
-      dataUrl: objectUrl,
-    };
   } catch (err) {
     console.error('Error exporting ticket as high-res image:', err);
     return { success: false, filename };
@@ -2302,7 +1521,7 @@ export const generateTreasuryTransferPDF = async (
       <!-- Header -->
       <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #ffffff; padding: 16px 20px; border-radius: 10px; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #334155;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 10px; border: 2px solid #f59e0b; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 10px; border: 2px solid #f59e0b; object-fit: cover;" />
           <div style="text-align: right;">
             <div style="font-size: 11px; font-weight: 800; color: #fbbf24; letter-spacing: 0.5px;">KAYAN TREASURY • الإدارة العامة للخزينة</div>
             <h1 style="margin: 2px 0 0 0; font-size: 20px; font-weight: 900; color: #ffffff;">${companyName}</h1>
@@ -2404,7 +1623,7 @@ export const generateTreasuryTransferPDF = async (
       scale: 2.5,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -2437,7 +1656,7 @@ export const generateTreasuryTransferPDF = async (
     const posY = margin + (maxH - renderH) / 2;
 
     doc.addImage(imgData, 'PNG', posX, posY, renderW, renderH);
-    saveJsPDFDoc(doc, `KAYAN_Treasury_Transfer_${transfer.referenceNumber}.pdf`);
+    doc.save(`KAYAN_Treasury_Transfer_${transfer.referenceNumber}.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating treasury transfer PDF:', err);
@@ -2458,9 +1677,9 @@ export const exportTicketElementAsPNG = async (elementId: string, fileName: stri
   if (!element) return false;
   try {
     const canvas = await html2canvas(element, {
-      scale: 2,
+      scale: 3,
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       backgroundColor: '#090d16',
       logging: false,
       onclone: sanitizeClonedDoc,
@@ -2471,11 +1690,29 @@ export const exportTicketElementAsPNG = async (elementId: string, fileName: stri
     return new Promise((resolve) => {
       canvas.toBlob((blob) => {
         if (blob) {
-          triggerFileDownload(blob, downloadFileName);
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = downloadFileName;
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+          setTimeout(() => {
+            if (document.body.contains(link)) {
+              document.body.removeChild(link);
+            }
+            URL.revokeObjectURL(url);
+          }, 2000);
           resolve(true);
         } else {
+          // Fallback to data URL
           const image = canvas.toDataURL('image/png');
-          triggerFileDownload(image, downloadFileName);
+          const link = document.createElement('a');
+          link.href = image;
+          link.download = downloadFileName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
           resolve(true);
         }
       }, 'image/png', 1.0);
@@ -2577,7 +1814,7 @@ export const generateBusManifestPDF = async (
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #d97706; padding-bottom: 14px; margin-bottom: 14px;">
         <!-- Right: Logo & Company -->
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #f59e0b; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #f59e0b; object-fit: cover;" />
           <div>
             <div style="font-size: 18px; font-weight: 900; color: #0f172a; font-family: 'Tajawal', sans-serif;">
               ${settings.companyNameAr || 'شركة كيان لتنظيم الرحلات والفعاليات الرسمية'}
@@ -2755,7 +1992,7 @@ export const generateBusManifestPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -2784,7 +2021,7 @@ export const generateBusManifestPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_Bus_${busNumber}_Manifest.pdf`);
+    doc.save(`KAYAN_Bus_${busNumber}_Manifest.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating Bus Manifest PDF:', err);
@@ -2859,7 +2096,7 @@ export const generateTShirtFactoryPDF = async (
       <!-- Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #7c3aed; padding-bottom: 14px; margin-bottom: 14px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #7c3aed; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #7c3aed; object-fit: cover;" />
           <div>
             <div style="font-size: 18px; font-weight: 900; color: #0f172a;">
               ${settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات'}
@@ -3005,7 +2242,7 @@ export const generateTShirtFactoryPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -3034,7 +2271,7 @@ export const generateTShirtFactoryPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_TShirt_Factory_Order.pdf`);
+    doc.save(`KAYAN_TShirt_Factory_Order.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating T-Shirt Factory PDF:', err);
@@ -3085,7 +2322,7 @@ export const generateTShirtDistributionPDF = async (
       <!-- Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #7c3aed; padding-bottom: 14px; margin-bottom: 14px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #7c3aed; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #7c3aed; object-fit: cover;" />
           <div>
             <div style="font-size: 18px; font-weight: 900; color: #0f172a;">
               ${settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات'}
@@ -3184,7 +2421,7 @@ export const generateTShirtDistributionPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -3213,7 +2450,7 @@ export const generateTShirtDistributionPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_TShirt_Distribution_Manifest.pdf`);
+    doc.save(`KAYAN_TShirt_Distribution_Manifest.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating T-Shirt Distribution PDF:', err);
@@ -3271,7 +2508,7 @@ export const generateMealKitchenPDF = async (
       <!-- Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #d97706; padding-bottom: 14px; margin-bottom: 14px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #d97706; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #d97706; object-fit: cover;" />
           <div>
             <div style="font-size: 18px; font-weight: 900; color: #0f172a;">
               ${settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات'}
@@ -3392,7 +2629,7 @@ export const generateMealKitchenPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -3421,7 +2658,7 @@ export const generateMealKitchenPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_Kitchen_Meals_Order.pdf`);
+    doc.save(`KAYAN_Kitchen_Meals_Order.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating Kitchen Meals PDF:', err);
@@ -3472,7 +2709,7 @@ export const generateMealDistributionPDF = async (
       <!-- Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #d97706; padding-bottom: 14px; margin-bottom: 14px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #d97706; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #d97706; object-fit: cover;" />
           <div>
             <div style="font-size: 18px; font-weight: 900; color: #0f172a;">
               ${settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات'}
@@ -3572,7 +2809,7 @@ export const generateMealDistributionPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -3601,7 +2838,7 @@ export const generateMealDistributionPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_Meal_Distribution_Manifest.pdf`);
+    doc.save(`KAYAN_Meal_Distribution_Manifest.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating Meal Distribution PDF:', err);
@@ -3655,7 +2892,7 @@ export const generateFinancialManifestPDF = async (
       <!-- Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 14px; margin-bottom: 14px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #059669; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #059669; object-fit: cover;" />
           <div>
             <div style="font-size: 18px; font-weight: 900; color: #0f172a;">
               ${settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات'}
@@ -3762,7 +2999,7 @@ export const generateFinancialManifestPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -3791,7 +3028,7 @@ export const generateFinancialManifestPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_Financial_Manifest.pdf`);
+    doc.save(`KAYAN_Financial_Manifest.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating Financial Manifest PDF:', err);
@@ -3854,7 +3091,7 @@ export const generateMasterAttendanceDeliveryPDF = async (
       <!-- Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #d97706; padding-bottom: 14px; margin-bottom: 14px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #f59e0b; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #f59e0b; object-fit: cover;" />
           <div>
             <div style="font-size: 18px; font-weight: 900; color: #0f172a;">
               ${settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات الرسمية'}
@@ -4027,7 +3264,7 @@ export const generateMasterAttendanceDeliveryPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -4056,7 +3293,7 @@ export const generateMasterAttendanceDeliveryPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_Master_Attendance_Manifest.pdf`);
+    doc.save(`KAYAN_Master_Attendance_Manifest.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating Master Attendance Manifest PDF:', err);
@@ -4113,7 +3350,7 @@ export const generateStudentsComprehensiveReportPDF = async (
       <!-- Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #d97706; padding-bottom: 14px; margin-bottom: 14px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #f59e0b; object-fit: cover;" />
+          <img src="${kayanBadge}" width="60" height="60" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #f59e0b; object-fit: cover;" />
           <div>
             <div style="font-size: 18px; font-weight: 900; color: #0f172a;">
               ${settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات الرسمية'}
@@ -4294,7 +3531,7 @@ export const generateStudentsComprehensiveReportPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -4323,7 +3560,7 @@ export const generateStudentsComprehensiveReportPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_Students_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
+    doc.save(`KAYAN_Students_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating Students Comprehensive Report PDF:', err);
@@ -4379,7 +3616,7 @@ export const generateTreasuryFullLedgerPDF = async (
       <!-- Top Header -->
       <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #ffffff; padding: 20px 24px; border-radius: 12px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #334155;">
         <div style="display: flex; align-items: center; gap: 16px;">
-          <img src="${cachedKayanBadgeBase64}" width="70" height="70" alt="KAYAN Badge" style="border-radius: 12px; border: 2px solid #f59e0b; object-fit: cover;" />
+          <img src="${kayanBadge}" width="70" height="70" alt="KAYAN Badge" style="border-radius: 12px; border: 2px solid #f59e0b; object-fit: cover;" />
           <div>
             <div style="font-size: 11px; font-weight: 800; color: #fbbf24; letter-spacing: 0.5px;">KAYAN EVENTS & TOURS • الإدارة المالية المركزية</div>
             <h1 style="margin: 3px 0 0 0; font-size: 24px; font-weight: 900; color: #ffffff; letter-spacing: -0.5px;">${companyName}</h1>
@@ -4536,7 +3773,7 @@ export const generateTreasuryFullLedgerPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -4564,7 +3801,7 @@ export const generateTreasuryFullLedgerPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_Treasury_Ledger_${new Date().toISOString().slice(0, 10)}.pdf`);
+    doc.save(`KAYAN_Treasury_Ledger_${new Date().toISOString().slice(0, 10)}.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating Treasury Full Ledger PDF:', err);
@@ -4611,7 +3848,7 @@ export const generateRunOfShowPDF = async (
       <!-- Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #d97706; padding-bottom: 16px; margin-bottom: 16px;">
         <div style="display: flex; align-items: center; gap: 14px;">
-          <img src="${cachedKayanBadgeBase64}" width="65" height="65" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #f59e0b; object-fit: cover;" />
+          <img src="${kayanBadge}" width="65" height="65" alt="KAYAN Badge" style="border-radius: 50%; border: 2px solid #f59e0b; object-fit: cover;" />
           <div>
             <h1 style="margin: 0; font-size: 22px; font-weight: 900; color: #0f172a;">${companyName}</h1>
             <p style="margin: 3px 0 0 0; font-size: 13.5px; font-weight: 700; color: #d97706;">البرنامج التنفيذي الزمني الميداني المعتمد (Run-of-Show Official Schedule)</p>
@@ -4689,7 +3926,7 @@ export const generateRunOfShowPDF = async (
       scale: 2,
       backgroundColor: '#ffffff',
       useCORS: true,
-      allowTaint: false,
+      allowTaint: true,
       logging: false,
       onclone: sanitizeClonedDoc,
     });
@@ -4717,7 +3954,7 @@ export const generateRunOfShowPDF = async (
       heightLeft -= pageHeight;
     }
 
-    saveJsPDFDoc(doc, `KAYAN_Run_of_Show_${settings.tripName || 'Schedule'}.pdf`);
+    doc.save(`KAYAN_Run_of_Show_${settings.tripName || 'Schedule'}.pdf`);
     return true;
   } catch (err) {
     console.error('Error generating Run of Show PDF:', err);

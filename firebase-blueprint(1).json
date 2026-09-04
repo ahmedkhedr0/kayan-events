@@ -1,0 +1,22 @@
+{
+  "entities": {
+    "trips": {
+      "title": "Trips",
+      "description": "Trip data including students, drivers, expenses, etc.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "app_state": {
+      "title": "App State",
+      "description": "Global settings and treasury",
+      "type": "object",
+      "properties": {
+        "activeTripId": { "type": "string" }
+      }
+    }
+  }
+}
