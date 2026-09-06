@@ -6,28 +6,26 @@ import {
   Sparkles,
   Loader2,
   Check,
+  Receipt,
   Image as ImageIcon,
-  Eye,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Student, TripSettings, PARTICIPANT_ROLES_CONFIG, getStudentMealInfo, isApparelAddon, isMealAddon } from '../types';
-import kayanLogo from '../assets/images/kayan_logo_1785354886047.jpg';
-import kayanBadge from '../assets/images/kayan_badge_1785354902221.jpg';
+import { KAYAN_LOGO_BASE64, KAYAN_BADGE_BASE64 } from '../assets/images/embeddedImages';
 import { 
   generateStudentTicketPDF, 
-  exportTicketAsHighResImage,
-  generateStudentTicketCanvas,
-  exportTicketElementAsPNG, 
-  copyTicketElementToClipboard, 
-  sanitizeClonedDoc 
+  generateReceiptPDF,
+  exportTicketElementAsPNG,
 } from '../services/pdfGenerator';
-import { sendWhatsAppReceipt, sendCustomWhatsAppMessage } from '../services/storage';
+import { numberToArabicWords } from './ContractsReceipts';
+import { sendWhatsAppReceipt } from '../services/storage';
 import { formatTripDateSafely } from '../utils/dateFormatter';
 
 interface DigitalTicketCardProps {
   student: Student;
   settings: TripSettings;
   onClose?: () => void;
+  onOpenReceipt?: () => void;
   autoActionText?: string;
   className?: string;
   showActions?: boolean;
@@ -37,13 +35,13 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
   student,
   settings,
   onClose,
+  onOpenReceipt,
   autoActionText,
   className = '',
   showActions = true,
 }) => {
   const [isExporting, setIsExporting] = useState(false);
-  const [downloadSuccessInfo, setDownloadSuccessInfo] = useState<{ filename: string; url?: string } | null>(null);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [isExportingImage, setIsExportingImage] = useState(false);
   const elementId = `kayan-digital-ticket-${student.id}`;
 
   const formattedDate = formatTripDateSafely(settings.tripDate);
@@ -55,118 +53,8 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
       ? 'خالص السداد ✅'
       : `عربون (${(student.paidAmount || 0).toLocaleString()} ج.م)`;
 
-  const handleDownloadHDImage = async () => {
-    setIsExporting(true);
-    try {
-      const result = await exportTicketAsHighResImage(student, settings, elementId);
-      if (result.success && result.dataUrl) {
-        setDownloadSuccessInfo({
-          filename: result.filename,
-          url: result.dataUrl,
-        });
-
-        // If on mobile device, open preview modal immediately for easy long-press / save to photos gallery
-        const isMobile = typeof window !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-        if (isMobile) {
-          setPreviewImageUrl(result.dataUrl);
-
-          // Try native file share for instant saving to Photo Gallery
-          if (result.blob && navigator.share && navigator.canShare) {
-            try {
-              const file = new File([result.blob], result.filename, { type: 'image/png' });
-              if (navigator.canShare({ files: [file] })) {
-                await navigator.share({
-                  title: `تذكرة ${student.name}`,
-                  text: `تذكرة رحلة ${settings.tripName || 'كيان'} #${student.ticketCode}`,
-                  files: [file],
-                });
-              }
-            } catch (shareErr) {
-              console.log('Native mobile share canceled or dismissed:', shareErr);
-            }
-          }
-        }
-
-        setTimeout(() => setDownloadSuccessInfo(null), 10000);
-      }
-    } catch (err) {
-      console.error('Error downloading ticket as image:', err);
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const handleWhatsAppImageShare = async () => {
-    setIsExporting(true);
-    try {
-      // Use the standalone 780px canvas to guarantee desktop VIP styling on all screens
-      const canvas = await generateStudentTicketCanvas(student, settings, elementId);
-      if (canvas && typeof window !== 'undefined') {
-        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-        if (blob) {
-          const file = new File([blob], `TICKET_${student.ticketCode}_${student.name}.png`, { type: 'image/png' });
-
-          // 1. Mobile Web Share API: Shares standard PNG image file directly to WhatsApp / Gallery
-          if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({
-              title: `تذكرة ${student.name}`,
-              text: `تذكرة صعود إلكترونية معتمدة #${student.ticketCode} - ${settings.companyNameAr || 'شركة كيان'}`,
-              files: [file],
-            });
-            setIsExporting(false);
-            return;
-          }
-        }
-      }
-
-      // 2. Desktop Fallback: Copy PNG image to clipboard + Download PNG file + Open WhatsApp Web
-      const copied = await copyTicketElementToClipboard(elementId);
-      await exportTicketAsHighResImage(student, settings, elementId);
-      
-      if (copied) {
-        setDownloadSuccessInfo({
-          filename: `TICKET_${student.ticketCode}_${student.name}.png`,
-        });
-        setTimeout(() => setDownloadSuccessInfo(null), 5000);
-      }
-
-      // Open WhatsApp chat with receipt details and paste tip
-      const statusText = student.paymentStatus === 'paid' ? 'خالص السداد بالكامل ✅' : `عربون (${student.paidAmount} ج.م) ⚠️`;
-      const msg = `
-🎟️ ════════════════════════════ 🎟️
-      🎫 *تذكرة حجز رقمية معتمدة (صورة PNG)* 🎫
-       ✨ KAYAN EVENTS & TRAVELS ✨
-🎟️ ════════════════════════════ 🎟️
-
-أهلاً بك يا *${student.name}* 👋
-مرفق صورة تذكرتك الرسمية الخاصة بالرحلة.
-
-👤 *صاحب التذكرة:* ${student.name}
-🔢 *كود التذكرة الفريد:* \`[ ${student.ticketCode} ]\`
-🎓 *الكلية / الدفعة:* ${student.faculty || 'كلية الحاسبات والمعلومات'}
-
-🚌 ═══ *تفاصيل الحافلة والتسكين* ═══ 🚌
-• الرحلة: *${settings.tripName}*
-• تاريخ الرحلة: *${settings.tripDate}*
-• رقم الأتوبيس: *أتوبيس رقم (${student.busNumber})*
-• رقم المقعد: *${student.seatNumber ? `#${student.seatNumber}` : 'سيحدد عند الصعود'}*
-• مقاس التيشرت: *${student.tshirtSize}*
-• حالة السداد: *${statusText}*
-• نقطة التجمع: *${student.pickupPoint || 'جامع الاستاد - كفرالشيخ'}*
-
-🖼️ *ملاحظة:* تم حفظ صورة التذكرة على جهازك ونسخها للحافظة (يمكنك اضغط Ctrl+V لإرفاق صورة التذكرة فوراً).
-
-📞 الدعم الفني: ${settings.supportPhone}
-نتمنى لك رحلة ممتعة مع كيان! 🎉
-`.trim();
-
-      sendCustomWhatsAppMessage(student.phone, msg);
-    } catch (err) {
-      console.error('Error sharing ticket image on WhatsApp:', err);
-      sendWhatsAppReceipt(student, settings);
-    } finally {
-      setIsExporting(false);
-    }
+  const handleShareWhatsApp = () => {
+    sendWhatsAppReceipt(student, settings);
   };
 
   const handleDownloadPDF = async () => {
@@ -177,6 +65,17 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
       console.error('Error generating PDF:', err);
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleDownloadImage = async () => {
+    setIsExportingImage(true);
+    try {
+      await exportTicketElementAsPNG(elementId, `تذكرة_${student.name.replace(/\s+/g, '_')}_${student.ticketCode}.png`);
+    } catch (err) {
+      console.error('Error exporting Ticket Image:', err);
+    } finally {
+      setIsExportingImage(false);
     }
   };
 
@@ -228,12 +127,11 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
             <span>{autoActionText}</span>
           </div>
           <button
-            onClick={handleWhatsAppImageShare}
-            disabled={isExporting}
-            className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm transition disabled:opacity-50"
+            onClick={handleShareWhatsApp}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm transition"
           >
-            {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
-            إرسال صورة التذكرة بالواتس
+            <Share2 className="w-3.5 h-3.5" />
+            إرسال التذكرة بالواتس
           </button>
         </div>
       )}
@@ -246,30 +144,30 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
           boxShadow: '0 25px 60px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.15)',
         }}
       >
-        {/* Scalloped Notched Edges on Left and Right */}
-        <div className="absolute left-[-8px] top-0 bottom-0 flex flex-col justify-between py-3.5 z-30 pointer-events-none">
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-        </div>
-
-        <div className="absolute right-[-8px] top-0 bottom-0 flex flex-col justify-between py-3.5 z-30 pointer-events-none">
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-          <div className="w-3.5 h-3.5 rounded-full bg-slate-950 border border-amber-500/50"></div>
-        </div>
-
-        {/* Primary Tear Notch Cutouts */}
-        <div className="absolute left-[-16px] top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-slate-950 border-r-2 border-amber-500/80 z-30"></div>
-        <div className="absolute right-[-16px] top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-slate-950 border-l-2 border-amber-500/80 z-30"></div>
-
         {/* Subtle Decorative Golden Corner Accents */}
         <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/10 rounded-bl-full pointer-events-none blur-xl"></div>
         <div className="absolute bottom-0 left-0 w-24 h-24 bg-indigo-500/10 rounded-tr-full pointer-events-none blur-xl"></div>
+
+        {/* Scalloped Notched Edges on Left and Right */}
+        <div className="absolute -left-2 top-0 bottom-0 flex flex-col justify-between py-6 z-30 pointer-events-none">
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+        </div>
+
+        <div className="absolute -right-2 top-0 bottom-0 flex flex-col justify-between py-6 z-30 pointer-events-none">
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+          <div className="w-3.5 h-3.5 rounded-full bg-[#080c17] border border-amber-500/50"></div>
+        </div>
+
+        {/* Primary Tear Notch Cutouts */}
+        <div className="absolute -left-4 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-[#080c17] border-r-2 border-amber-500/80 z-30 pointer-events-none"></div>
+        <div className="absolute -right-4 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-[#080c17] border-l-2 border-amber-500/80 z-30 pointer-events-none"></div>
 
         {/* Top Header Logo & Company Info */}
         <div className="flex justify-between items-center border-b border-amber-500/30 pb-3.5 gap-3">
@@ -277,7 +175,7 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
           <div className="flex items-center gap-3">
             <div className="relative">
               <img
-                src={kayanBadge}
+                src={KAYAN_BADGE_BASE64}
                 alt="KAYAN Badge"
                 className="w-13 h-13 rounded-full object-cover border-2 border-amber-400 shadow-md shadow-amber-500/30 shrink-0"
                 referrerPolicy="no-referrer"
@@ -288,26 +186,27 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
             </div>
             <div className="text-right">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm sm:text-base font-black text-amber-300">
-                  {settings.companyNameAr || 'شركة كيان لتنظيم رحلات الـ Fun Day'}
-                </h3>
-                <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] px-2 py-0.5 rounded-md font-bold shrink-0">
+                <span className="bg-emerald-950/80 text-emerald-400 border border-emerald-500/50 text-[11px] px-2 py-0.5 rounded-md font-bold shrink-0">
                   معتمدة ✓
                 </span>
+                <div className="text-sm sm:text-base font-black">
+                  <span className="text-white">Fun Day الـ </span>
+                  <span className="text-amber-400">{settings.companyNameAr || 'شركة كيان لتنظيم رحلات'}</span>
+                </div>
               </div>
-              <p className="text-[11px] text-slate-400 font-sans mt-0.5 flex items-center gap-1.5">
-                <span>تذكرة صعود رقمية رسمية</span>
-                <span className="text-slate-600">•</span>
-                <span className="font-mono text-[10px] text-slate-400">OFFICIAL BOARDING PASS</span>
+              <p className="text-[11px] text-slate-400 font-mono mt-0.5 tracking-wider">
+                OFFICIAL BOARDING PASS • تذكرة صعود رقمية رسمية
               </p>
             </div>
           </div>
 
           {/* Left: Golden Ticket Code Pill (In RTL: left side) */}
           <div className="text-left shrink-0">
-            <div className="bg-gradient-to-r from-amber-500/20 to-amber-600/30 text-amber-300 border border-amber-500/60 px-3.5 py-1.5 rounded-xl shadow-inner text-center">
-              <span className="text-[9px] text-amber-400/80 block font-sans font-bold">كود التذكرة</span>
-              <span className="text-xs sm:text-sm font-black font-mono tracking-wide">#{student.ticketCode}</span>
+            <div className="bg-[#181512] text-amber-300 border border-amber-500/60 px-3.5 py-1.5 rounded-xl shadow-inner text-center">
+              <span className="text-[10px] text-amber-400/90 block font-sans font-bold">كود التذكرة</span>
+              <span className="text-xs sm:text-sm font-black font-mono tracking-wide text-amber-300">
+                {student.ticketCode.startsWith('KYN') ? student.ticketCode : `KYN-${student.ticketCode}`}#
+              </span>
             </div>
           </div>
         </div>
@@ -315,7 +214,7 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
         {/* KAYAN Official Promotional Brand Banner */}
         <div className="relative rounded-2xl overflow-hidden border border-amber-500/40 bg-slate-950 shadow-xl group">
           <img
-            src={kayanLogo}
+            src={KAYAN_LOGO_BASE64}
             alt="KAYAN Official Banner"
             className="w-full h-24 sm:h-28 object-cover object-center opacity-95 transition-transform duration-700 group-hover:scale-102"
             referrerPolicy="no-referrer"
@@ -323,61 +222,55 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
           {/* Subtle Vignette Overlays for Maximum Legibility */}
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-slate-950/40 pointer-events-none"></div>
 
-          {/* Floating Trip & Brand Tags */}
-          <div className="absolute bottom-2.5 right-3 left-3 flex items-center justify-between pointer-events-none gap-2">
-            <div className="bg-slate-950/90 backdrop-blur-md text-amber-300 border border-amber-500/50 text-[11px] sm:text-xs font-black px-3 py-1.5 rounded-xl shadow-lg flex items-center gap-1.5">
+          {/* Floating Trip & Brand Tags - Centered inside solid pill containers */}
+          <div className="absolute top-2.5 sm:top-3 right-3 left-3 flex items-center justify-between pointer-events-none gap-2 z-10 flex-wrap">
+            <div className="bg-slate-950/92 backdrop-blur-md text-amber-300 border border-amber-500/60 text-[11px] sm:text-xs font-black px-3.5 py-1.5 rounded-xl shadow-lg flex items-center gap-1.5 leading-none">
               <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span>{settings.tripName || 'رحلات وفاعليات كيان الرسمية'}</span>
+              <span>{settings.tripName || 'fun day نظم الشريف 2027'}</span>
             </div>
 
-            <div className="bg-slate-950/90 backdrop-blur-md text-slate-300 border border-slate-700 text-[10px] sm:text-xs font-bold px-2.5 py-1.5 rounded-xl font-mono tracking-wider shadow">
+            <div className="bg-slate-950/92 backdrop-blur-md text-slate-200 border border-amber-500/40 text-[10px] sm:text-xs font-black px-3 py-1.5 rounded-xl font-mono tracking-wider shadow leading-none">
               KAYAN TOURS & EVENTS
             </div>
           </div>
         </div>
 
         {/* Main Content Grid: Right Column (Student Details) + Left Column (QR & Barcode Stub) */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-stretch">
+        <div className="ticket-main-grid grid grid-cols-1 md:grid-cols-12 gap-4 items-stretch">
           {/* Main Details (8 cols on desktop - RTL First Child is on the Right) */}
           <div className="md:col-span-8 flex flex-col justify-between space-y-3.5">
             {/* Student Header */}
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-slate-400 font-semibold">المسافر:</span>
-                <span className="text-[11px] text-slate-400 font-mono">هاتف: <strong className="text-slate-200 font-sans">{student.phone}</strong></span>
+                <span className="text-xs text-slate-400 font-medium">المسافر:</span>
+                <span className="text-xs text-slate-400 font-mono">هـاتـف: <strong className="text-slate-100 font-sans tracking-wide">{student.phone}</strong></span>
               </div>
-              <h2 className="text-2xl sm:text-3xl font-black text-white mt-0.5 tracking-tight">
+              <h2 className="text-3xl sm:text-4xl font-black text-white mt-0.5 tracking-wide">
                 {student.name}
               </h2>
-              <div className="flex items-center gap-2 flex-wrap mt-1.5">
-                {student.faculty && (
-                  <span className="bg-amber-500/15 text-amber-300 border border-amber-500/30 text-xs px-2.5 py-0.5 rounded-lg font-bold">
-                    {student.faculty}
+              <div className="flex items-center gap-2 flex-wrap mt-2">
+                {(student.customRole || (student.participantRole && student.participantRole !== 'student')) && (
+                  <span className="bg-[#2b1e0a] text-amber-300 border border-amber-500/50 text-xs px-3 py-1 rounded-lg font-black flex items-center gap-1.5 shadow-sm">
+                    <span>{student.customRole?.includes('👑') ? '' : (PARTICIPANT_ROLES_CONFIG[student.participantRole || 'student']?.icon || '👑')}</span>
+                    <span>{student.customRole || PARTICIPANT_ROLES_CONFIG[student.participantRole || 'student']?.badge || 'ADMIN KAYAN 👑'}</span>
                   </span>
                 )}
-                {(student.customRole || (student.participantRole && student.participantRole !== 'student')) && (
-                  <span
-                    className={`text-[10px] px-2.5 py-0.5 rounded-lg font-black flex items-center gap-1 border ${
-                      PARTICIPANT_ROLES_CONFIG[student.participantRole || 'student']?.bg || 'bg-amber-500/20'
-                    } ${PARTICIPANT_ROLES_CONFIG[student.participantRole || 'student']?.text || 'text-amber-300'} ${
-                      PARTICIPANT_ROLES_CONFIG[student.participantRole || 'student']?.border || 'border-amber-500/40'
-                    }`}
-                  >
-                    <span>{PARTICIPANT_ROLES_CONFIG[student.participantRole || 'student']?.icon || '🎫'}</span>
-                    <span>{student.customRole || PARTICIPANT_ROLES_CONFIG[student.participantRole || 'student']?.badge}</span>
+                {student.faculty && (
+                  <span className="bg-slate-800/90 text-slate-200 border border-slate-700 text-xs px-3 py-1 rounded-lg font-bold shadow-sm">
+                    {student.faculty}
                   </span>
                 )}
               </div>
             </div>
 
             {/* Logistics Grid Box */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-3 shadow-inner">
+            <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 space-y-3.5 shadow-inner">
               {/* Row 1: Trip Destination & Date/Time */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-3 border-b border-slate-800/80 text-xs">
                 {/* Trip Name & Destination */}
                 <div>
-                  <span className="text-[10px] text-slate-400 block font-medium">الرحلة والوجهة:</span>
-                  <strong className="text-amber-300 text-sm font-black block mt-0.5">
+                  <span className="text-[11px] text-slate-400 block font-medium">الرحلة والوجهة:</span>
+                  <strong className="text-amber-400 text-sm font-black block mt-0.5">
                     {settings.tripName}
                   </strong>
                   {settings.destination && (
@@ -389,15 +282,10 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
 
                 {/* Date & Time */}
                 <div>
-                  <span className="text-[10px] text-slate-400 block font-medium">تاريخ وتوقيت الرحلة:</span>
+                  <span className="text-[11px] text-slate-400 block font-medium">تاريخ وتوقيت الرحلة:</span>
                   <strong className="text-white text-xs sm:text-sm font-bold block mt-0.5">
                     {formattedDate}
                   </strong>
-                  {student.departureTime && (
-                    <span className="text-emerald-400 text-xs font-bold block mt-0.5">
-                      {student.departureTime}
-                    </span>
-                  )}
                 </div>
               </div>
 
@@ -548,42 +436,36 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
               )}
             </div>
 
-            {/* Bottom Bar: Rendered dynamically only if student entered pickup point, national ID, or emergency phone */}
-            {Boolean(student.pickupPoint || student.nationalId || student.emergencyPhone) && (
-              <div className="bg-slate-950 border border-amber-500/40 rounded-xl p-2.5 flex justify-between items-center text-xs flex-wrap gap-2 shadow-sm">
-                {student.pickupPoint ? (
-                  <div className="text-slate-300 flex items-center gap-1.5">
-                    <span className="text-amber-400">📍</span>
-                    <span className="text-slate-400">التجمع:</span>
-                    <strong className="text-amber-300 font-bold">{student.pickupPoint}</strong>
+            {/* Bottom Bar: Clean, well-formatted pickup, national ID, and emergency phone */}
+            <div className="bg-slate-950 border border-amber-500/40 rounded-xl p-2.5 flex justify-between items-center text-xs flex-wrap gap-2 shadow-sm">
+              <div className="text-slate-300 flex items-center gap-1.5 leading-none">
+                <span className="text-amber-400 shrink-0 text-sm">📍</span>
+                <span className="text-slate-400 font-bold">التجمع:</span>
+                <strong className="text-amber-300 font-bold">
+                  {student.pickupPoint || settings.assemblyLocation || 'جامع الاستاد - كفرالشيخ'}
+                </strong>
+              </div>
+
+              <div className="flex items-center gap-3.5 flex-wrap">
+                {student.nationalId && (
+                  <div className="text-slate-300 flex items-center gap-1.5 leading-none">
+                    <span className="bg-blue-600 text-white text-[9px] px-1.5 py-0.5 rounded font-black tracking-tighter shrink-0 leading-none">ID</span>
+                    <span className="text-slate-400 font-bold">القومي:</span>
+                    <strong className="text-white font-mono font-bold tracking-wide" dir="ltr">{student.nationalId}</strong>
                   </div>
-                ) : (
-                  <div className="text-slate-400 text-[11px] font-mono">KYN - {student.ticketCode}</div>
                 )}
 
-                <div className="flex items-center gap-3 flex-wrap">
-                  {student.nationalId && (
-                    <div className="text-slate-300 font-mono flex items-center gap-1">
-                      <span className="bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded font-bold">ID</span>
-                      <span className="text-slate-400">القومي:</span>
-                      <strong className="text-white font-mono">{student.nationalId}</strong>
-                    </div>
-                  )}
-
-                  {student.emergencyPhone && (
-                    <div className="text-slate-300 flex items-center gap-1">
-                      <span className="text-rose-400">📞</span>
-                      <span className="text-slate-400">طوارئ:</span>
-                      <strong className="text-white font-mono">{student.emergencyPhone}</strong>
-                    </div>
-                  )}
+                <div className="text-slate-300 flex items-center gap-1.5 leading-none">
+                  <span className="text-rose-400 shrink-0 text-sm">📞</span>
+                  <span className="text-slate-400 font-bold">طوارئ:</span>
+                  <strong className="text-white font-mono font-bold tracking-wide" dir="ltr">{student.emergencyPhone || settings.supportPhone || '01006735016'}</strong>
                 </div>
               </div>
-            )}
+            </div>
           </div>
 
           {/* Verification Stub: QR Code & Barcode (4 cols on desktop - RTL Second Child is on the Left) */}
-          <div className="md:col-span-4 flex flex-col items-center justify-between space-y-3 bg-slate-900/80 p-3.5 rounded-2xl border-2 border-dashed border-amber-500/40 text-center relative overflow-hidden">
+          <div className="md:col-span-4 flex flex-col items-center justify-between space-y-3.5 bg-slate-900/80 p-4 rounded-2xl border-2 border-dashed border-amber-500/40 text-center relative overflow-hidden">
             {/* White QR Box */}
             <div className="w-full bg-white p-3 rounded-2xl shadow-xl border-2 border-amber-400 flex flex-col items-center justify-center">
               <QRCodeSVG
@@ -599,39 +481,39 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
                 size={135}
                 level="M"
               />
-              <span className="text-xs font-mono font-black text-slate-950 mt-1.5 block tracking-wide">
-                KYN - {student.ticketCode}
+              <span className="text-xs font-mono font-black text-slate-950 mt-2 block tracking-wide">
+                KYN - {student.ticketCode.startsWith('KYN') ? student.ticketCode : `KYN-${student.ticketCode}`}
               </span>
             </div>
 
             {/* Official Verification Tag */}
-            <div className="text-[11px] text-emerald-400 font-bold flex items-center justify-center gap-1">
-              <span>✓</span>
+            <div className="text-xs text-emerald-400 font-bold flex items-center justify-center gap-1.5 leading-none">
               <span>تذكرة صعود إلكترونية معتمدة</span>
+              <span className="text-sm">✓</span>
             </div>
 
             {/* Barcode Graphic Strip */}
-            <div className="w-full bg-slate-950 border border-amber-500/40 rounded-xl p-2 text-center">
-              <div className="flex justify-center items-center gap-0.5 sm:gap-1 h-5 overflow-hidden">
-                <div className="w-0.5 sm:w-1 h-full bg-slate-100"></div>
-                <div className="w-1.5 h-full bg-slate-100"></div>
-                <div className="w-0.5 h-full bg-slate-100"></div>
-                <div className="w-1 h-full bg-slate-100"></div>
-                <div className="w-0.5 h-full bg-slate-100"></div>
-                <div className="w-2 h-full bg-slate-100"></div>
-                <div className="w-1 h-full bg-slate-100"></div>
-                <div className="w-0.5 h-full bg-slate-100"></div>
-                <div className="w-1.5 h-full bg-slate-100"></div>
-                <div className="w-0.5 h-full bg-slate-100"></div>
-                <div className="w-2 h-full bg-slate-100"></div>
-                <div className="w-0.5 h-full bg-slate-100"></div>
-                <div className="w-1 h-full bg-slate-100"></div>
-                <div className="w-1 h-full bg-slate-100"></div>
-                <div className="w-2 h-full bg-slate-100"></div>
-                <div className="w-0.5 h-full bg-slate-100"></div>
-                <div className="w-1.5 h-full bg-slate-100"></div>
-                <div className="w-0.5 h-full bg-slate-100"></div>
-                <div className="w-1 h-full bg-slate-100"></div>
+            <div className="w-full bg-slate-950 border border-amber-500/40 rounded-xl py-2 px-3 flex items-center justify-center shadow-inner">
+              <div className="flex justify-center items-center gap-[2.5px] h-6 overflow-hidden">
+                <div className="w-[3px] h-full bg-white rounded-xs"></div>
+                <div className="w-[1.5px] h-full bg-white"></div>
+                <div className="w-[4px] h-full bg-white rounded-xs"></div>
+                <div className="w-[1px] h-full bg-white"></div>
+                <div className="w-[3px] h-full bg-white"></div>
+                <div className="w-[2px] h-full bg-white"></div>
+                <div className="w-[5px] h-full bg-white rounded-xs"></div>
+                <div className="w-[1.5px] h-full bg-white"></div>
+                <div className="w-[3px] h-full bg-white"></div>
+                <div className="w-[1px] h-full bg-white"></div>
+                <div className="w-[4px] h-full bg-white rounded-xs"></div>
+                <div className="w-[2px] h-full bg-white"></div>
+                <div className="w-[3px] h-full bg-white"></div>
+                <div className="w-[1.5px] h-full bg-white"></div>
+                <div className="w-[5px] h-full bg-white rounded-xs"></div>
+                <div className="w-[2px] h-full bg-white"></div>
+                <div className="w-[3px] h-full bg-white"></div>
+                <div className="w-[1px] h-full bg-white"></div>
+                <div className="w-[4px] h-full bg-white rounded-xs"></div>
               </div>
             </div>
           </div>
@@ -641,44 +523,17 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
       {/* ACTION BUTTONS TOOLBAR */}
       {showActions && (
         <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 shadow-lg space-y-2.5">
-          {downloadSuccessInfo && (
-            <div className="bg-emerald-950/90 border border-emerald-500/60 p-3 rounded-xl text-xs text-emerald-200 flex items-center justify-between flex-wrap gap-2 animate-in fade-in">
-              <div className="flex items-center gap-2">
-                <Check className="w-5 h-5 text-emerald-400 shrink-0" />
-                <div>
-                  <div className="font-bold text-white">
-                    تم تنزيل صورة التذكرة بنجاح إلى جهازك! 📥
-                  </div>
-                  <div className="text-[11px] text-emerald-300 font-mono mt-0.5">
-                    الملف: <span className="text-amber-300 font-bold">{downloadSuccessInfo.filename}</span> في مجلد التنزيلات (Downloads).
-                  </div>
-                </div>
-              </div>
-
-              {downloadSuccessInfo.url && (
-                <button
-                  type="button"
-                  onClick={() => setPreviewImageUrl(downloadSuccessInfo.url || null)}
-                  className="bg-emerald-800 hover:bg-emerald-700 text-emerald-100 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  معاينة وتكبير الصورة 🔍
-                </button>
-              )}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
-            {/* Download HD PNG Image */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-xs">
+            {/* Download Ticket as Image (PNG) */}
             <button
               type="button"
-              disabled={isExporting}
-              onClick={handleDownloadHDImage}
-              className="bg-amber-600 hover:bg-amber-500 text-white font-black py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition shadow-md shadow-amber-600/20 disabled:opacity-50"
-              title="تنزيل صورة التذكرة فقط فائقة الدقة بجهازك"
+              disabled={isExportingImage}
+              onClick={handleDownloadImage}
+              className="bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-black py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition shadow-md shadow-amber-500/20 disabled:opacity-50"
+              title="تنزيل بطاقة التذكرة كصورة عالية الدقة PNG تناسب الموبايل والكمبيوتر"
             >
-              {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
-              <span>تحميل التذكرة كصورة (HD PNG) 🖼️</span>
+              {isExportingImage ? <Loader2 className="w-4 h-4 animate-spin text-slate-950" /> : <ImageIcon className="w-4 h-4" />}
+              <span>تنزيل كصورة (PNG) 🖼️</span>
             </button>
 
             {/* Download PDF */}
@@ -689,18 +544,56 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
               className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition shadow-md shadow-indigo-600/20 disabled:opacity-50"
             >
               {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              <span>تحميل التذكرة (PDF) 📄</span>
+              <span>تنزيل التذكرة (PDF) 📄</span>
             </button>
 
-            {/* Direct WhatsApp Share (Ticket Image PNG) */}
+            {/* Receipt Voucher Button */}
             <button
               type="button"
-              disabled={isExporting}
-              onClick={handleWhatsAppImageShare}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition shadow-md shadow-emerald-600/20 disabled:opacity-50"
+              onClick={() => {
+                if (onOpenReceipt) {
+                  onOpenReceipt();
+                } else {
+                  generateReceiptPDF(
+                    {
+                      id: `rc-${student.id}`,
+                      voucherNumber: `RC-${student.ticketCode}`,
+                      type: 'receipt',
+                      personName: student.name,
+                      amount: student.paidAmount,
+                      amountInWords: numberToArabicWords(student.paidAmount),
+                      reason: `حجز تذكرة ${settings.tripName} - أتوبيس ${student.busNumber}`,
+                      paymentMethod: student.paymentMethod,
+                      date: new Date().toISOString().slice(0, 10),
+                      supervisorName: 'إدارة كيان',
+                      totalAmount: student.totalAmount,
+                      previousPaid: 0,
+                      previousRemaining: student.totalAmount,
+                      paidNow: student.paidAmount,
+                      totalPaidSoFar: student.paidAmount,
+                      currentRemaining: student.remainingAmount,
+                      isDeposit: student.remainingAmount > 0,
+                      isFullyPaid: student.remainingAmount === 0,
+                    },
+                    settings
+                  );
+                }
+              }}
+              className="bg-teal-700 hover:bg-teal-600 text-white font-black py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition shadow-md shadow-teal-700/20 active:scale-95"
+              title="عرض وطباعة إيصال السداد المالي المعتمد"
             >
-              {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-              <span>مشاركة بالواتساب 📲</span>
+              <Receipt className="w-4 h-4 text-emerald-300" />
+              <span>إيصال القبض المالي 🧾</span>
+            </button>
+
+            {/* Direct WhatsApp Share */}
+            <button
+              type="button"
+              onClick={handleShareWhatsApp}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition shadow-md shadow-emerald-600/20"
+            >
+              <Share2 className="w-4 h-4" />
+              <span>مشاركة واتساب 📲</span>
             </button>
 
             {/* Print Ticket */}
@@ -716,64 +609,6 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
           </div>
         </div>
       )}
-
-      {/* Standalone Generated Ticket Image Preview Modal */}
-      {previewImageUrl && (
-        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl p-5 max-w-3xl w-full space-y-4 text-center shadow-2xl relative">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <h4 className="text-amber-300 font-bold text-sm flex items-center gap-2">
-                <ImageIcon className="w-4 h-4 text-amber-400" /> صورة التذكرة المستخرجة بجودة فائقة (Ultra HD)
-              </h4>
-              <button
-                type="button"
-                onClick={() => setPreviewImageUrl(null)}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-800"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="bg-slate-950 p-2 rounded-2xl border border-slate-800 overflow-hidden flex justify-center">
-              <img
-                src={previewImageUrl}
-                alt="Ticket Preview"
-                className="max-h-[70vh] w-auto rounded-xl object-contain shadow-2xl"
-              />
-            </div>
-
-            <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
-              <span className="text-slate-400">
-                💡 يمكنك أيضاً الضغط مطولاً أو بالزر الأيمن على الصورة واختيار <strong>"حفظ الصورة باسم..."</strong>
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (previewImageUrl) {
-                    const downloadLink = document.createElement('a');
-                    downloadLink.href = previewImageUrl;
-                    downloadLink.download = `KAYAN_Ticket_${student.ticketCode}_${student.name}.png`;
-                    downloadLink.target = '_blank';
-                    downloadLink.rel = 'noopener noreferrer';
-                    document.body.appendChild(downloadLink);
-                    downloadLink.click();
-                    setTimeout(() => {
-                      if (document.body.contains(downloadLink)) {
-                        document.body.removeChild(downloadLink);
-                      }
-                    }, 2000);
-                  }
-                }}
-                className="bg-amber-600 hover:bg-amber-500 text-white font-black px-4 py-2 rounded-xl flex items-center gap-1.5 shadow transition cursor-pointer"
-              >
-                <Download className="w-4 h-4" />
-                تنزيل الصورة لجهازك
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
-

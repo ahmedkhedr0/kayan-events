@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import html2canvas from 'html2canvas-pro';
+import { toCanvas as htmlToImageToCanvas, toBlob as htmlToImageToBlob, toPng as htmlToImageToPng } from 'html-to-image';
 import QRCode from 'qrcode';
 import { ContractData, ReceiptVoucher, Student, TripSettings, TreasuryTransfer, CompanyTreasury, TimelineEvent, DriverInfo, getStudentMealInfo, getCompanionMealInfo } from '../types';
 import { formatTripDateSafely } from '../utils/dateFormatter';
@@ -46,11 +47,23 @@ const ctx2d = canvas2d ? canvas2d.getContext('2d') : null;
 
 export const replaceOklabWithRgb = (text: string): string => {
   if (!text || typeof text !== 'string') return text;
-  if (!text.includes('oklab') && !text.includes('oklch') && !text.includes('color(')) {
+  if (!text.includes('oklab') && !text.includes('oklch') && !text.includes('color(') && !text.includes('color-mix(')) {
     return text;
   }
 
-  return text.replace(/(oklab|oklch|color)\([^)]+\)/gi, (match) => {
+  return text.replace(/(oklab|oklch|color|color-mix)\([^;}{)]+\)/gi, (match) => {
+    // 1. Try native canvas resolution if available in browser
+    if (ctx2d) {
+      try {
+        ctx2d.fillStyle = '#000000';
+        ctx2d.fillStyle = match;
+        if (ctx2d.fillStyle && ctx2d.fillStyle !== '#000000' && (ctx2d.fillStyle.startsWith('#') || ctx2d.fillStyle.startsWith('rgb'))) {
+          return ctx2d.fillStyle;
+        }
+      } catch (_) {}
+    }
+
+    // 2. Fallback heuristic parser
     let alpha = 1;
     const alphaMatch = match.match(/\/\s*([0-9.]+)(%)?/);
     if (alphaMatch) {
@@ -1107,25 +1120,45 @@ export const exportReceiptAsHighResImage = async (
  * Direct 2D Canvas VIP Boarding Pass Renderer
  * Guaranteed 100% offline, zero-network, zero CSS bugs, instantaneous execution on all mobile & desktop browsers
  */
+/**
+ * Pure HTML5 2D Canvas High-Resolution VIP Digital Boarding Pass
+ * Guaranteed 100% offline, zero-network, zero CSS bugs, instantaneous execution on all mobile & desktop browsers.
+ * Replicates the exact visual structure, designs, luxury dark gradient, golden borders, tear cutouts, and pills from the official ticket.
+ */
 export const drawTicketPassToCanvas = async (
   student: Student,
   settings: TripSettings
 ): Promise<HTMLCanvasElement> => {
+  // Delegate directly to generateStudentTicketCanvas for 100% pixel-perfect replica of the digital ticket card
+  try {
+    const renderedCanvas = await generateStudentTicketCanvas(student, settings);
+    if (renderedCanvas && renderedCanvas.width > 0) {
+      return renderedCanvas;
+    }
+  } catch (canvasGenErr) {
+    console.warn('generateStudentTicketCanvas delegation failed, proceeding to fallback renderer:', canvasGenErr);
+  }
+
   if (typeof document !== 'undefined' && document.fonts) {
     try {
       await document.fonts.ready;
     } catch (_) {}
   }
 
-  const width = 1400;
-  const height = 760;
+  // Base canvas logical dimensions (Compact VIP Portrait aspect ratio matching on-screen card)
+  const logicalWidth = 800;
+  const logicalHeight = 960;
+  const scale = 2; // Retina 2x resolution (1600x1920) for crystal clear HD rendering
+
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = logicalWidth * scale;
+  canvas.height = logicalHeight * scale;
   const ctx = canvas.getContext('2d');
   if (!ctx) return canvas;
 
-  // Helper for rounded rectangle with fallback
+  ctx.scale(scale, scale);
+
+  // Helper for rounded rectangle with cross-browser fallback
   const drawRoundedRect = (x: number, y: number, w: number, h: number, r: number) => {
     ctx.beginPath();
     if (typeof (ctx as any).roundRect === 'function') {
@@ -1144,53 +1177,72 @@ export const drawTicketPassToCanvas = async (
     ctx.closePath();
   };
 
-  // 1. Base Luxury Card Gradient Background
-  drawRoundedRect(16, 16, width - 32, height - 32, 36);
-  const cardGrad = ctx.createLinearGradient(0, 0, width, height);
+  // 0. Dark Canvas Outer Frame (Matching screenshot modal backdrop)
+  ctx.fillStyle = '#060913';
+  ctx.fillRect(0, 0, logicalWidth, logicalHeight);
+
+  const cardX = 20;
+  const cardY = 20;
+  const cardW = 760;
+  const cardH = 920;
+  const cardRadius = 24;
+
+  // 1. Luxury Dark Card Gradient
+  drawRoundedRect(cardX, cardY, cardW, cardH, cardRadius);
+  const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
   cardGrad.addColorStop(0, '#020617');
   cardGrad.addColorStop(0.45, '#0f172a');
   cardGrad.addColorStop(1, '#1e1b4b');
   ctx.fillStyle = cardGrad;
   ctx.fill();
 
-  // 2. Gold Luxury Card Border
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = '#f59e0b';
+  // 2. Amber / Gold Outer Border
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
   ctx.stroke();
 
-  // 3. Scalloped Cutout Notches (Left and Right Tear Lines)
-  ctx.fillStyle = '#090d16';
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)';
-  ctx.lineWidth = 3;
-  // Left primary tear notch
+  // 3. Primary Tear Notch Cutouts (Left and Right Centers)
+  const notchY = cardY + cardH / 2;
+  const notchRadius = 16;
+  ctx.fillStyle = '#060913';
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
+  ctx.lineWidth = 2.5;
+
+  // Left tear notch
   ctx.beginPath();
-  ctx.arc(16, height / 2, 28, -Math.PI / 2, Math.PI / 2, false);
-  ctx.fill();
-  ctx.stroke();
-  // Right primary tear notch
-  ctx.beginPath();
-  ctx.arc(width - 16, height / 2, 28, Math.PI / 2, (3 * Math.PI) / 2, false);
+  ctx.arc(cardX, notchY, notchRadius, -Math.PI / 2, Math.PI / 2, false);
   ctx.fill();
   ctx.stroke();
 
-  // Small scalloped circles along left and right edges
-  const scallopPositions = [120, 200, height - 200, height - 120];
+  // Right tear notch
+  ctx.beginPath();
+  ctx.arc(cardX + cardW, notchY, notchRadius, Math.PI / 2, (3 * Math.PI) / 2, false);
+  ctx.fill();
+  ctx.stroke();
+
+  // Small scalloped dots along left and right edges
+  const scallopPositions = [cardY + 80, cardY + 160, cardY + cardH - 160, cardY + cardH - 80];
   scallopPositions.forEach((posY) => {
-    // Left
+    // Left dot
     ctx.beginPath();
-    ctx.arc(16, posY, 10, -Math.PI / 2, Math.PI / 2, false);
-    ctx.fillStyle = '#090d16';
+    ctx.arc(cardX, posY, 4.5, -Math.PI / 2, Math.PI / 2, false);
+    ctx.fillStyle = '#060913';
     ctx.fill();
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    // Right
+
+    // Right dot
     ctx.beginPath();
-    ctx.arc(width - 16, posY, 10, Math.PI / 2, (3 * Math.PI) / 2, false);
-    ctx.fillStyle = '#090d16';
+    ctx.arc(cardX + cardW, posY, 4.5, Math.PI / 2, (3 * Math.PI) / 2, false);
+    ctx.fillStyle = '#060913';
     ctx.fill();
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   });
 
-  // Load Base64 Images
+  // Load Base64 Images safely
   const loadImg = (src: string): Promise<HTMLImageElement | null> =>
     new Promise((resolve) => {
       if (!src) return resolve(null);
@@ -1205,109 +1257,176 @@ export const drawTicketPassToCanvas = async (
     loadImg(cachedKayanLogoBase64),
   ]);
 
-  // 4. Header Section
-  // Top Badge (Right aligned for RTL)
+  // 4. Header Bar (Top RTL: Badge + Company Info + Official Title | Left: Ticket Code Pill)
+  const headerY = cardY + 22;
+
+  // Right circular badge (diameter 48)
+  const badgeCenterX = cardX + cardW - 50;
+  const badgeCenterY = headerY + 26;
   if (badgeImg) {
     ctx.save();
     ctx.beginPath();
-    ctx.arc(width - 90, 75, 34, 0, Math.PI * 2);
+    ctx.arc(badgeCenterX, badgeCenterY, 24, 0, Math.PI * 2);
     ctx.closePath();
     ctx.clip();
-    ctx.drawImage(badgeImg, width - 124, 41, 68, 68);
+    ctx.drawImage(badgeImg, badgeCenterX - 24, badgeCenterY - 24, 48, 48);
     ctx.restore();
     ctx.beginPath();
-    ctx.arc(width - 90, 75, 34, 0, Math.PI * 2);
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = '#fde047';
+    ctx.arc(badgeCenterX, badgeCenterY, 24, 0, Math.PI * 2);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#f59e0b';
     ctx.stroke();
+
+    // Small green check circle at bottom right of badge
+    ctx.beginPath();
+    ctx.arc(badgeCenterX + 16, badgeCenterY + 16, 7, 0, Math.PI * 2);
+    ctx.fillStyle = '#10b981';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#020617';
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('✓', badgeCenterX + 16, badgeCenterY + 19);
   }
 
-  // Header Titles (Arabic RTL)
+  // Company Name & Official Subtitle (RTL)
   ctx.textAlign = 'right';
   ctx.direction = 'rtl';
-  ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 28px "Tajawal", system-ui, sans-serif';
-  ctx.fillText(settings.companyNameAr || 'شركة كيان لتنظيم الفعاليات والرحلات', width - 140, 70);
 
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", system-ui, sans-serif';
-  ctx.fillText('تذكرة صعود رقمية رسمية • OFFICIAL BOARDING PASS   [ معتمدة ✓ ]', width - 140, 100);
-
-  // Left Ticket Code Badge
-  drawRoundedRect(50, 42, 240, 68, 16);
-  const codeGrad = ctx.createLinearGradient(50, 42, 290, 110);
-  codeGrad.addColorStop(0, 'rgba(245, 158, 11, 0.25)');
-  codeGrad.addColorStop(1, 'rgba(217, 119, 6, 0.35)');
-  ctx.fillStyle = codeGrad;
+  // Green verification pill [ معتمدة ✓ ]
+  const greenPillW = 62;
+  const greenPillH = 22;
+  const greenPillX = cardX + cardW - 84 - 230 - greenPillW; // positioned nicely next to title
+  drawRoundedRect(greenPillX, headerY + 4, greenPillW, greenPillH, 6);
+  ctx.fillStyle = 'rgba(6, 78, 59, 0.85)';
   ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#f59e0b';
+  ctx.strokeStyle = 'rgba(16, 185, 129, 0.8)';
+  ctx.lineWidth = 1;
   ctx.stroke();
 
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(253, 224, 71, 0.9)';
-  ctx.font = 'bold 13px "Tajawal", sans-serif';
-  ctx.fillText('كود التذكرة الفريد', 170, 66);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '900 24px monospace';
-  ctx.fillText(`#${student.ticketCode}`, 170, 96);
+  ctx.fillStyle = '#34d399';
+  ctx.font = 'bold 11px "Tajawal", system-ui, sans-serif';
+  ctx.fillText('معتمدة ✓', greenPillX + greenPillW / 2, headerY + 19);
 
-  // 5. Promotional Brand Banner Strip
-  drawRoundedRect(50, 126, width - 100, 94, 16);
+  // Title: Fun Day الـ + شركة كيان لتنظيم رحلات
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 15px "Tajawal", system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('Fun Day الـ ', cardX + cardW - 84, headerY + 20);
+  ctx.fillStyle = '#fbbf24';
+  ctx.fillText(settings.companyNameAr || 'شركة كيان لتنظيم رحلات', cardX + cardW - 162, headerY + 20);
+
+  // Subtitle: OFFICIAL BOARDING PASS • تذكرة صعود رقمية رسمية
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '10.5px monospace, "Tajawal", sans-serif';
+  ctx.fillText('OFFICIAL BOARDING PASS • تذكرة صعود رقمية رسمية', cardX + cardW - 84, headerY + 42);
+
+  // Left: Ticket Code Box
+  const codeBoxX = cardX + 20;
+  const codeBoxY = headerY;
+  const codeBoxW = 145;
+  const codeBoxH = 54;
+  drawRoundedRect(codeBoxX, codeBoxY, codeBoxW, codeBoxH, 10);
+  ctx.fillStyle = '#211708';
+  ctx.fill();
+  ctx.strokeStyle = '#d97706';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.direction = 'ltr';
+  ctx.fillStyle = '#d97706';
+  ctx.font = 'bold 10px "Tajawal", sans-serif';
+  ctx.fillText('كود التذكرة', codeBoxX + codeBoxW / 2, codeBoxY + 18);
+
+  const ticketCodeFormatted = student.ticketCode.startsWith('KYN') ? student.ticketCode : `KYN-${student.ticketCode}`;
+  ctx.fillStyle = '#fbbf24';
+  ctx.font = '900 15px monospace';
+  ctx.fillText(`#${ticketCodeFormatted}`, codeBoxX + codeBoxW / 2, codeBoxY + 42);
+
+  // Divider below header
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cardX + 20, cardY + 86);
+  ctx.lineTo(cardX + cardW - 20, cardY + 86);
+  ctx.stroke();
+
+  // 5. Official Promotional Banner Strip
+  const bannerX = cardX + 20;
+  const bannerY = cardY + 98;
+  const bannerW = cardW - 40;
+  const bannerH = 100;
+
+  drawRoundedRect(bannerX, bannerY, bannerW, bannerH, 14);
   ctx.save();
   ctx.clip();
   if (logoImg) {
-    ctx.drawImage(logoImg, 50, 126, width - 100, 94);
+    ctx.drawImage(logoImg, bannerX, bannerY, bannerW, bannerH);
   } else {
     ctx.fillStyle = '#0f172a';
-    ctx.fillRect(50, 126, width - 100, 94);
+    ctx.fillRect(bannerX, bannerY, bannerW, bannerH);
   }
-  // Dark overlay
-  const bannerOverlay = ctx.createLinearGradient(0, 126, 0, 220);
-  bannerOverlay.addColorStop(0, 'rgba(2, 6, 23, 0.75)');
-  bannerOverlay.addColorStop(1, 'rgba(2, 6, 23, 0.92)');
+  const bannerOverlay = ctx.createLinearGradient(bannerX, bannerY, bannerX, bannerY + bannerH);
+  bannerOverlay.addColorStop(0, 'rgba(2, 6, 23, 0.7)');
+  bannerOverlay.addColorStop(1, 'rgba(2, 6, 23, 0.88)');
   ctx.fillStyle = bannerOverlay;
-  ctx.fillRect(50, 126, width - 100, 94);
+  ctx.fillRect(bannerX, bannerY, bannerW, bannerH);
   ctx.restore();
+
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
   ctx.stroke();
 
-  // Floating Pills on Banner
+  // Overlaid Pills on Banner:
+  // Left Pill: KAYAN TOURS & EVENTS
+  drawRoundedRect(bannerX + 12, bannerY + 54, 185, 34, 8);
+  ctx.fillStyle = 'rgba(2, 6, 23, 0.88)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.direction = 'ltr';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 11px monospace';
+  ctx.fillText('KAYAN TOURS & EVENTS', bannerX + 12 + 185 / 2, bannerY + 75);
+
   // Right Pill: Trip Name
-  drawRoundedRect(width - 480, 142, 410, 60, 12);
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.9)';
+  const tripPillW = 270;
+  const tripPillX = bannerX + bannerW - 12 - tripPillW;
+  drawRoundedRect(tripPillX, bannerY + 54, tripPillW, 34, 8);
+  ctx.fillStyle = 'rgba(2, 6, 23, 0.92)';
   ctx.fill();
   ctx.strokeStyle = '#f59e0b';
   ctx.lineWidth = 1.5;
   ctx.stroke();
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 20px "Tajawal", sans-serif';
-  ctx.fillText(`✨ ${settings.tripName || 'fun day نظم الشريف 2027'}`, width - 90, 180);
-
-  // Left Pill: Brand Title
-  drawRoundedRect(70, 142, 280, 60, 12);
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.9)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#f8fafc';
-  ctx.font = '800 16px monospace';
-  ctx.fillText('KAYAN TOURS & EVENTS', 210, 178);
+  ctx.direction = 'rtl';
+  ctx.fillStyle = '#fde047';
+  ctx.font = 'bold 12px "Tajawal", sans-serif';
+  ctx.fillText(`✨ ${settings.tripName || "El-Sherif IS '27 | Official Fun Day"}`, tripPillX + tripPillW / 2, bannerY + 76);
 
-  // 6. Main Content Split: Right Details (width - 490), Left QR Stub (360px)
-  // Left QR Stub: x = 50, y = 236, w = 370, h = 484
-  drawRoundedRect(50, 236, 370, 484, 20);
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+  // 6. Main Content Area (Two Columns Layout in RTL)
+  // Left Column (QR Stub): x = cardX + 20, w = 226, h = 616
+  // Right Column (Passenger details): x = cardX + 262, w = 478, h = 616
+  const stubX = cardX + 20;
+  const stubW = 226;
+  const stubH = 616;
+  const detailsX = cardX + 262;
+  const detailsW = 478;
+
+  // --- LEFT COLUMN: QR STUB ---
+  drawRoundedRect(stubX, cardY + 212, stubW, stubH, 14);
+  ctx.fillStyle = 'rgba(13, 21, 39, 0.9)';
   ctx.fill();
   ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
   ctx.lineWidth = 2;
-  // Dashed border for stub tear line
   ctx.save();
-  ctx.setLineDash([8, 6]);
+  ctx.setLineDash([6, 5]);
   ctx.stroke();
   ctx.restore();
 
@@ -1325,7 +1444,7 @@ export const drawTicketPassToCanvas = async (
   const qrCanvas = document.createElement('canvas');
   try {
     await QRCode.toCanvas(qrCanvas, qrPayload, {
-      width: 250,
+      width: 140,
       margin: 1,
       color: {
         dark: '#020617',
@@ -1335,213 +1454,298 @@ export const drawTicketPassToCanvas = async (
   } catch (_) {}
 
   // White Box for QR Code
-  drawRoundedRect(75, 252, 320, 310, 18);
+  const qrBoxW = 202;
+  const qrBoxH = 210;
+  const qrBoxX = stubX + 12;
+  const qrBoxY = cardY + 224;
+
+  drawRoundedRect(qrBoxX, qrBoxY, qrBoxW, qrBoxH, 14);
   ctx.fillStyle = '#ffffff';
   ctx.fill();
   ctx.strokeStyle = '#f59e0b';
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 2;
   ctx.stroke();
 
   if (qrCanvas.width > 0) {
-    ctx.drawImage(qrCanvas, 105, 266, 260, 260);
+    ctx.drawImage(qrCanvas, qrBoxX + (qrBoxW - 140) / 2, qrBoxY + 12, 140, 140);
   }
+
   ctx.textAlign = 'center';
+  ctx.direction = 'ltr';
   ctx.fillStyle = '#020617';
-  ctx.font = '900 18px monospace';
-  ctx.fillText(`KYN - ${student.ticketCode}`, 235, 550);
+  ctx.font = '900 12px monospace';
+  ctx.fillText(`KYN - ${ticketCodeFormatted}`, qrBoxX + qrBoxW / 2, qrBoxY + 185);
 
-  // Verification Tag below QR Box
+  // Verification Tag below QR
+  ctx.direction = 'rtl';
   ctx.fillStyle = '#34d399';
-  ctx.font = 'bold 16px "Tajawal", sans-serif';
-  ctx.fillText('✓ تذكرة صعود إلكترونية معتمدة', 235, 592);
+  ctx.font = 'bold 11.5px "Tajawal", sans-serif';
+  ctx.fillText('✓ تذكرة صعود إلكترونية معتمدة', stubX + stubW / 2, cardY + 465);
 
-  // Barcode Graphic Strip
-  drawRoundedRect(75, 620, 320, 80, 12);
+  // Simulated Barcode Box
+  const barcodeBoxW = 202;
+  const barcodeBoxH = 60;
+  const barcodeBoxX = stubX + 12;
+  const barcodeBoxY = cardY + 540;
+
+  drawRoundedRect(barcodeBoxX, barcodeBoxY, barcodeBoxW, barcodeBoxH, 10);
   ctx.fillStyle = '#020617';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+  ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Draw simulated barcode lines
-  const barXStart = 95;
-  const barWidths = [3, 6, 2, 4, 2, 7, 3, 2, 5, 3, 8, 2, 4, 3, 6, 2, 5, 3, 7, 2, 4, 3, 6, 2, 5, 3];
-  let curBarX = barXStart;
+  // Simulated barcode stripes
+  const barStart = barcodeBoxX + 12;
+  const bars = [2, 4, 1, 3, 2, 5, 2, 1, 4, 2, 5, 1, 3, 2, 4, 1, 5, 2, 3, 1, 4, 2, 4, 1, 3, 2, 5, 2];
+  let bX = barStart;
   ctx.fillStyle = '#f8fafc';
-  barWidths.forEach((w) => {
-    ctx.fillRect(curBarX, 634, w, 32);
-    curBarX += w + 4;
+  bars.forEach((w) => {
+    ctx.fillRect(bX, barcodeBoxY + 12, w, 24);
+    bX += w + 3.5;
   });
   ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 12px monospace';
-  ctx.fillText(`VERIFIED PASS #${student.ticketCode}`, 235, 686);
+  ctx.font = '9px monospace';
+  ctx.direction = 'ltr';
+  ctx.fillText(`VERIFIED PASS #${ticketCodeFormatted}`, barcodeBoxX + barcodeBoxW / 2, barcodeBoxY + 49);
 
-  // 7. Right Student Details: x = 444, y = 236, w = 906, h = 484
-  const rightX = width - 70;
+  // --- RIGHT COLUMN: PASSENGER & LOGISTICS DETAILS ---
+  const rightEdgeX = detailsX + detailsW - 8;
 
-  // Passenger Header
+  // Header row: المسافر (right) & هاتف (left)
+  ctx.direction = 'rtl';
   ctx.textAlign = 'right';
   ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 16px "Tajawal", sans-serif';
-  ctx.fillText(`المسافر: ${student.name}   |   رقم الهاتف: ${student.phone}`, rightX, 265);
+  ctx.font = 'bold 11.5px "Tajawal", sans-serif';
+  ctx.fillText('المسافر:', rightEdgeX, cardY + 230);
 
+  ctx.textAlign = 'left';
+  ctx.direction = 'ltr';
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = 'bold 11.5px "Tajawal", sans-serif';
+  ctx.fillText(`هـاتـف: ${student.phone}`, detailsX + 8, cardY + 230);
+
+  // Passenger Name
+  ctx.textAlign = 'right';
+  ctx.direction = 'rtl';
   ctx.fillStyle = '#ffffff';
-  ctx.font = '900 36px "Tajawal", sans-serif';
-  ctx.fillText(student.name, rightX, 310);
+  ctx.font = '900 26px "Tajawal", sans-serif';
+  ctx.fillText(student.name, rightEdgeX, cardY + 266);
 
-  // Logistics Box
-  drawRoundedRect(444, 330, 906, 305, 16);
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+  // Badges Row: Role & Faculty
+  const roleBadge = student.customRole || (student.participantRole && (student as any).participantRoleLabel) || 'ADMIN KAYAN 👑';
+  const facultyBadge = student.faculty || 'نظم ومعلومات';
+
+  // Role pill (Amber)
+  drawRoundedRect(rightEdgeX - 130, cardY + 282, 130, 26, 6);
+  ctx.fillStyle = '#271a06';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(51, 65, 85, 0.9)';
+  ctx.strokeStyle = '#f59e0b';
   ctx.lineWidth = 1.5;
   ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fbbf24';
+  ctx.font = 'bold 11.5px "Tajawal", sans-serif';
+  ctx.fillText(roleBadge, rightEdgeX - 65, cardY + 299);
 
+  // Faculty pill (Slate)
+  drawRoundedRect(rightEdgeX - 130 - 10 - 110, cardY + 282, 110, 26, 6);
+  ctx.fillStyle = '#1e293b';
+  ctx.fill();
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = 'bold 11px "Tajawal", sans-serif';
+  ctx.fillText(facultyBadge, rightEdgeX - 130 - 10 - 55, cardY + 299);
+
+  // Logistics Details Card
+  const logCardY = cardY + 322;
+  const logCardH = 250;
+  drawRoundedRect(detailsX, logCardY, detailsW, logCardH, 14);
+  ctx.fillStyle = 'rgba(12, 19, 34, 0.9)';
+  ctx.fill();
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Row 1: Destination & Date
   const formattedDate = formatTripDateSafely(settings.tripDate);
 
-  // Row 1: Trip Name & Date
-  // Left: Date
+  // Right: Trip and Destination
   ctx.textAlign = 'right';
   ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('تاريخ وتوقيت الرحلة:', 860, 362);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 19px "Tajawal", sans-serif';
-  ctx.fillText(formattedDate, 860, 392);
+  ctx.font = 'bold 10.5px "Tajawal", sans-serif';
+  ctx.fillText('الرحلة والوجهة:', rightEdgeX - 12, logCardY + 22);
 
-  // Right: Trip Destination
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('الرحلة والوجهة:', rightX - 20, 362);
   ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 21px "Tajawal", sans-serif';
-  ctx.fillText(settings.tripName || 'رحلة اليوم الترفيهي', rightX - 20, 392);
+  ctx.font = 'bold 12.5px "Tajawal", sans-serif';
+  ctx.fillText(settings.tripName || 'رحلة اليوم الترفيهي', rightEdgeX - 12, logCardY + 40);
 
-  // Divider Line Row 1
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = '11px "Tajawal", sans-serif';
+  ctx.fillText(settings.destination || 'قريه الجوهره', rightEdgeX - 12, logCardY + 56);
+
+  // Left: Date
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = 'bold 10.5px "Tajawal", sans-serif';
+  ctx.fillText('تاريخ وتوقيت الرحلة:', detailsX + 175, logCardY + 22);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 11.5px "Tajawal", sans-serif';
+  ctx.fillText(formattedDate, detailsX + 175, logCardY + 44);
+
+  // Divider Line inside Logistics Card
   ctx.strokeStyle = '#1e293b';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(464, 412);
-  ctx.lineTo(width - 90, 412);
+  ctx.moveTo(detailsX + 12, logCardY + 66);
+  ctx.lineTo(detailsX + detailsW - 12, logCardY + 66);
   ctx.stroke();
 
-  // Row 2: Bus & Seat Box + Payment Box
-  // Bus & Seat Box: x = 900, y = 426, w = 430, h = 95
-  drawRoundedRect(900, 426, 430, 95, 14);
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
+  // Row 2: Bus & Seat Box + Payment Box side-by-side
+  const subBoxW = 222;
+  const subBoxH = 64;
+  const subBoxY = logCardY + 76;
+
+  // Bus & Seat Box (Right)
+  const busBoxX = detailsX + detailsW - 12 - subBoxW;
+  drawRoundedRect(busBoxX, subBoxY, subBoxW, subBoxH, 10);
+  ctx.fillStyle = '#131937';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(96, 165, 250, 0.45)';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#3730a3';
+  ctx.lineWidth = 1;
   ctx.stroke();
 
   ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('الحافلة والمقعد المخصص 🚌:', rightX - 40, 456);
-  ctx.fillStyle = '#60a5fa';
-  ctx.font = '900 24px "Tajawal", sans-serif';
-  ctx.fillText(`أتوبيس (${student.busNumber})   |   مقعد #${student.seatNumber || 'حر'}`, rightX - 40, 496);
+  ctx.font = 'bold 9.5px "Tajawal", sans-serif';
+  ctx.fillText('الحافلة والمقعد 🚎:', busBoxX + subBoxW - 10, subBoxY + 18);
 
-  // Payment Box: x = 464, y = 426, w = 416, h = 95
-  drawRoundedRect(464, 426, 416, 95, 14);
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 13px "Tajawal", sans-serif';
+  ctx.fillText(`أتوبيس (${student.busNumber})`, busBoxX + subBoxW - 10, subBoxY + 38);
+
+  ctx.fillStyle = '#fde047';
+  ctx.font = 'bold 11px "Tajawal", sans-serif';
+  ctx.fillText(`مقعد رقم ${student.seatNumber || 'حر'}`, busBoxX + subBoxW - 10, subBoxY + 54);
+
+  // Payment Status Box (Left)
+  const payBoxX = detailsX + 12;
+  drawRoundedRect(payBoxX, subBoxY, subBoxW, subBoxH, 10);
+  ctx.fillStyle = '#131937';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(52, 211, 153, 0.45)';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#3730a3';
+  ctx.lineWidth = 1;
   ctx.stroke();
 
   const paymentText = student.isFreeTicket
-    ? 'تذكرة ضيافة VIP 🎁'
+    ? 'تذكرة مجانية VIP 🎁'
     : student.paymentStatus === 'paid'
     ? 'خالص السداد بالكامل ✅'
     : `عربون مسدد (${(student.paidAmount || 0).toLocaleString()} ج.م)`;
 
+  const paymentSubText = student.isFreeTicket
+    ? 'تذكرة ضيافة VIP'
+    : student.remainingAmount > 0
+    ? `متبقي: ${(student.remainingAmount || 0).toLocaleString()} ج.م`
+    : 'كامل الرسوم مسددة';
+
   ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('الموقف المالي والسداد 💳:', 860, 456);
+  ctx.font = 'bold 9.5px "Tajawal", sans-serif';
+  ctx.fillText('الموقف المالي والسداد 💳:', payBoxX + subBoxW - 10, subBoxY + 18);
+
   ctx.fillStyle = '#34d399';
-  ctx.font = '900 22px "Tajawal", sans-serif';
-  ctx.fillText(paymentText, 860, 494);
+  ctx.font = 'bold 11.5px "Tajawal", sans-serif';
+  ctx.fillText(paymentText, payBoxX + subBoxW - 10, subBoxY + 38);
 
-  // Row 3: Addons (T-shirt & Meal)
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = '9.5px "Tajawal", sans-serif';
+  ctx.fillText(paymentSubText, payBoxX + subBoxW - 10, subBoxY + 54);
+
+  // Row 3: Addons / Inclusions
   const mealInfo = getStudentMealInfo(student, settings);
-  const hasTshirt = Boolean(student.tshirtSize && student.tshirtSize !== 'none');
-  const hasMeal = Boolean(mealInfo.hasMeal);
+  ctx.fillStyle = '#fde047';
+  ctx.font = 'bold 10.5px "Tajawal", sans-serif';
+  ctx.fillText('✨ الخدمات والإضافات المشمولة بالحجز:', rightEdgeX - 12, logCardY + 162);
 
-  if (hasTshirt || hasMeal) {
-    if (hasTshirt && hasMeal) {
-      // T-shirt box
-      drawRoundedRect(900, 535, 430, 80, 12);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(168, 85, 247, 0.45)';
-      ctx.stroke();
-      ctx.fillStyle = '#c084fc';
-      ctx.font = 'bold 18px "Tajawal", sans-serif';
-      ctx.fillText(`👕 تيشيرت الفعالية: مقاس (${student.tshirtSize || 'L'})`, rightX - 40, 582);
+  // Meal Inclusions Card
+  const mealCardX = detailsX + 12;
+  const mealCardY = logCardY + 174;
+  const mealCardW = detailsW - 24;
+  const mealCardH = 46;
 
-      // Meal box
-      drawRoundedRect(464, 535, 416, 80, 12);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
-      ctx.stroke();
-      ctx.fillStyle = '#fde047';
-      ctx.font = 'bold 18px "Tajawal", sans-serif';
-      ctx.fillText(`🍔 وجبة الغداء: ${mealInfo.mealName}`, 860, 582);
-    } else if (hasTshirt) {
-      drawRoundedRect(464, 535, 866, 80, 12);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(168, 85, 247, 0.45)';
-      ctx.stroke();
-      ctx.fillStyle = '#c084fc';
-      ctx.font = 'bold 18px "Tajawal", sans-serif';
-      ctx.fillText(`👕 تيشيرت الفعالية: مقاس (${student.tshirtSize || 'L'})   [ مشمول بالحجز ✓ ]`, rightX - 40, 582);
-    } else {
-      drawRoundedRect(464, 535, 866, 80, 12);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
-      ctx.stroke();
-      ctx.fillStyle = '#fde047';
-      ctx.font = 'bold 18px "Tajawal", sans-serif';
-      ctx.fillText(`🍔 وجبة الغداء: ${mealInfo.mealName}   [ مشمولة بالحجز ✓ ]`, rightX - 40, 582);
-    }
-  }
-
-  // 8. Bottom Information Bar (Pickup, National ID, Emergency)
-  drawRoundedRect(444, 650, 906, 70, 14);
-  ctx.fillStyle = '#020617';
+  drawRoundedRect(mealCardX, mealCardY, mealCardW, mealCardH, 8);
+  ctx.fillStyle = '#0a0e1a';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+  ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Pickup Location (Right)
   ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('📍 التجمع:', rightX - 20, 692);
+  ctx.font = 'bold 9.5px "Tajawal", sans-serif';
+  ctx.fillText('وجبة طعام: 🍔', mealCardX + mealCardW - 10, mealCardY + 18);
+
   ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 17px "Tajawal", sans-serif';
-  ctx.fillText(student.pickupPoint || settings.assemblyLocation || 'جامع الاستاد - كفرالشيخ', rightX - 95, 692);
+  ctx.font = 'bold 11.5px "Tajawal", sans-serif';
+  ctx.fillText(mealInfo.mealName || 'وجبة طعام مميزة مشمولة بالبرنامج', mealCardX + mealCardW - 10, mealCardY + 36);
+
+  // Green pill on the left of meal card
+  drawRoundedRect(mealCardX + 10, mealCardY + 12, 70, 22, 5);
+  ctx.fillStyle = 'rgba(16, 185, 129, 0.2)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(16, 185, 129, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#34d399';
+  ctx.font = 'bold 10px "Tajawal", sans-serif';
+  ctx.fillText('مشمولة 🎫', mealCardX + 45, mealCardY + 27);
+
+  // Bottom Logistics Bar (Pickup, National ID, Emergency Phone)
+  const bottomBarX = detailsX;
+  const bottomBarY = cardY + 584;
+  const bottomBarW = detailsW;
+  const bottomBarH = 40;
+
+  drawRoundedRect(bottomBarX, bottomBarY, bottomBarW, bottomBarH, 10);
+  ctx.fillStyle = '#070c18';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Pickup location (Right)
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = 'bold 9.5px "Tajawal", sans-serif';
+  ctx.fillText('📍 التجمع:', bottomBarX + bottomBarW - 8, bottomBarY + 25);
+
+  ctx.fillStyle = '#fde047';
+  ctx.font = 'bold 10px "Tajawal", sans-serif';
+  const pickupText = student.pickupPoint || settings.assemblyLocation || 'شارع الاستاد - عند جامع الاستاد';
+  ctx.fillText(pickupText.length > 25 ? `${pickupText.substring(0, 24)}...` : pickupText, bottomBarX + bottomBarW - 55, bottomBarY + 25);
 
   // National ID (Center)
   if (student.nationalId) {
+    ctx.direction = 'ltr';
+    ctx.textAlign = 'center';
     ctx.fillStyle = '#94a3b8';
-    ctx.font = 'bold 15px "Tajawal", sans-serif';
-    ctx.fillText('القومي:', 940, 692);
+    ctx.font = 'bold 9.5px "Tajawal", sans-serif';
+    ctx.fillText('ID القومي:', bottomBarX + 175, bottomBarY + 25);
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px monospace';
-    ctx.fillText(student.nationalId, 880, 692);
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(student.nationalId, bottomBarX + 225, bottomBarY + 25);
   }
 
   // Emergency Phone (Left)
+  ctx.direction = 'ltr';
+  ctx.textAlign = 'left';
   ctx.fillStyle = '#f43f5e';
-  ctx.font = 'bold 15px "Tajawal", sans-serif';
-  ctx.fillText('📞 طوارئ:', 680, 692);
+  ctx.font = 'bold 9.5px "Tajawal", sans-serif';
+  ctx.fillText('📞 طوارئ:', bottomBarX + 10, bottomBarY + 25);
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 16px monospace';
-  ctx.fillText(student.emergencyPhone || settings.supportPhone || '01006735016', 600, 692);
+  ctx.font = 'bold 10px monospace';
+  ctx.fillText(student.emergencyPhone || settings.supportPhone || '01067575051', bottomBarX + 58, bottomBarY + 25);
 
   return canvas;
 };
@@ -1554,90 +1758,84 @@ export const generateStudentTicketCanvas = async (
   settings: TripSettings,
   elementId?: string
 ): Promise<HTMLCanvasElement | null> => {
-  // 1. Direct On-Screen DOM Element Capture (Guarantees 100% exact match to what the user sees)
-  if (elementId && typeof document !== 'undefined') {
-    const targetDomElem = document.getElementById(elementId);
-    if (targetDomElem) {
-      try {
-        if (document.fonts) {
+  // 1. Direct On-Screen DOM Element Capture (Guarantees 100% exact replica of what the user sees)
+  const targetDomElem =
+    (elementId
+      ? document.getElementById(`${elementId}-frame`) || document.getElementById(elementId)
+      : null) ||
+    document.getElementById(`kayan-digital-ticket-${student.id}-frame`) ||
+    document.getElementById(`kayan-digital-ticket-${student.id}`);
+
+  if (targetDomElem) {
+    try {
+      if (typeof document !== 'undefined' && document.fonts) {
+        try {
           await document.fonts.ready;
-        }
+        } catch (_) {}
+      }
 
-        // Wait for images inside target to load
-        const domImages = Array.from(targetDomElem.querySelectorAll('img'));
-        await Promise.all(
-          domImages.map(
-            (img) =>
-              new Promise((resolve) => {
-                if (img.complete) return resolve(true);
-                img.onload = () => resolve(true);
-                img.onerror = () => resolve(true);
-              })
-          )
-        );
+      // Wait for all images inside target to load
+      const domImages = Array.from(targetDomElem.querySelectorAll('img'));
+      await Promise.all(
+        domImages.map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) return resolve(true);
+              img.onload = () => resolve(true);
+              img.onerror = () => resolve(true);
+            })
+        )
+      );
 
-        const domCanvas = await html2canvas(targetDomElem, {
-          scale: 2, // Crisp HD 2x resolution (optimal for both mobile devices and high-DPI desktop displays without memory crashes)
-          backgroundColor: '#020617',
-          useCORS: true,
-          allowTaint: false,
-          logging: false,
-          scrollX: 0,
-          scrollY: 0,
-          onclone: (clonedDoc) => {
-            const clonedElem = clonedDoc.getElementById(elementId);
-            if (clonedElem) {
-              // Lock width to 700px so mobile phone viewports export the full desktop layout
-              clonedElem.style.width = '700px';
-              clonedElem.style.maxWidth = '700px';
-              clonedElem.style.minWidth = '700px';
-              clonedElem.style.margin = '0 auto';
-              clonedElem.style.boxSizing = 'border-box';
-
-              // Force desktop 2-column layout (8 cols details / 4 cols QR stub) even on mobile phone screens
-              const gridElem = clonedElem.querySelector('.ticket-main-grid') as HTMLElement;
-              if (gridElem) {
-                gridElem.style.display = 'grid';
-                gridElem.style.gridTemplateColumns = 'repeat(12, minmax(0, 1fr))';
-                gridElem.style.gap = '16px';
-                gridElem.style.alignItems = 'stretch';
-
-                if (gridElem.children.length >= 2) {
-                  const col8 = gridElem.children[0] as HTMLElement;
-                  if (col8) {
-                    col8.style.gridColumn = 'span 8 / span 8';
-                  }
-                  const col4 = gridElem.children[1] as HTMLElement;
-                  if (col4) {
-                    col4.style.gridColumn = 'span 4 / span 4';
-                  }
-                }
-              }
-            }
-            sanitizeClonedDoc(clonedDoc);
-          },
+      // Method 1: html-to-image native SVG canvas (Preserves exact DOM/CSS, zero oklab issues, 100% replica)
+      try {
+        const domCanvas = await htmlToImageToCanvas(targetDomElem, {
+          pixelRatio: 2.5,
+          backgroundColor: '#060913',
+          skipFonts: true,
+          cacheBust: true,
         });
 
         if (domCanvas && domCanvas.width > 0) {
           return domCanvas;
         }
-      } catch (domCaptureErr) {
-        console.warn('Direct DOM capture fallback to canvas generator:', domCaptureErr);
+      } catch (htiErr) {
+        console.warn('html-to-image on live DOM failed, trying html2canvas:', htiErr);
       }
+
+      // Method 2: html2canvas with sanitized styles
+      const domCanvas = await html2canvas(targetDomElem, {
+        scale: 2.5,
+        backgroundColor: '#060913',
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: 1024,
+        onclone: (clonedDoc) => {
+          const frame = clonedDoc.getElementById(`${elementId}-frame`);
+          if (frame) {
+            frame.style.width = '750px';
+            frame.style.maxWidth = '750px';
+            frame.style.minWidth = '750px';
+            frame.style.margin = '0 auto';
+            frame.style.boxSizing = 'border-box';
+            frame.style.backgroundColor = '#060913';
+          }
+          sanitizeClonedDoc(clonedDoc);
+        },
+      });
+
+      if (domCanvas && domCanvas.width > 0) {
+        return domCanvas;
+      }
+    } catch (domCaptureErr) {
+      console.warn('Direct DOM capture fallback error:', domCaptureErr);
     }
   }
 
-  // 2. Pure High-Resolution 2D Canvas Generation (Instantaneous, 100% offline, immune to CSS/CORS issues)
-  try {
-    const canvas = await drawTicketPassToCanvas(student, settings);
-    if (canvas && canvas.width > 0) {
-      return canvas;
-    }
-  } catch (canvasErr) {
-    console.warn('Direct 2D canvas generation error, trying offscreen container:', canvasErr);
-  }
-
-  // 3. Offscreen Dedicated Container Fallback (used as ultimate legacy fallback)
+  // 2. Offscreen Dedicated Container (used when element is not mounted in DOM)
   const container = document.createElement('div');
   container.style.position = 'fixed';
   container.style.left = '-9999px';
@@ -2050,10 +2248,24 @@ export const generateStudentTicketCanvas = async (
       )
     );
 
+    // Method 1: html-to-image on container
+    try {
+      const cCanvas = await htmlToImageToCanvas((container.firstElementChild as HTMLElement) || container, {
+        pixelRatio: 2.5,
+        backgroundColor: '#060913',
+        skipFonts: true,
+      });
+      if (cCanvas && cCanvas.width > 0) {
+        return cCanvas;
+      }
+    } catch (cErr) {
+      console.warn('html-to-image on offscreen container failed, trying html2canvas:', cErr);
+    }
+
+    // Method 2: html2canvas on container
     const canvas = await html2canvas(container, {
-      scale: 3, // Ultra-sharp 3x desktop rendering
-      windowWidth: 1280, // Guarantee desktop layout irrespective of mobile viewport
-      backgroundColor: '#090d16',
+      scale: 2.5,
+      backgroundColor: '#060913',
       useCORS: true,
       allowTaint: false,
       logging: false,
@@ -2451,81 +2663,261 @@ export const generateTreasuryTransferPDF = async (
 };
 
 /**
- * Capture an existing DOM element (e.g. visual ticket card) and download it as PNG image directly to user's device
+ * Capture an existing DOM element (or use high-definition canvas pass) and download it as PNG image directly to user's device.
+ * Guarantees 100% exact match in structure, layout, badges, QR, and colors.
  */
-export const exportTicketElementAsPNG = async (elementId: string, fileName: string): Promise<boolean> => {
-  const element = document.getElementById(elementId);
-  if (!element) return false;
-  try {
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      allowTaint: false,
-      backgroundColor: '#090d16',
-      logging: false,
-      onclone: sanitizeClonedDoc,
-    });
+export const exportTicketElementAsPNG = async (
+  elementId: string,
+  fileName: string,
+  student?: Student,
+  settings?: TripSettings
+): Promise<boolean> => {
+  const downloadFileName = fileName.endsWith('.png') ? fileName : `${fileName}.png`;
 
-    const downloadFileName = fileName.endsWith('.png') ? fileName : `${fileName}.png`;
+  // 1. Direct High-Fidelity DOM Capture (Guarantees 100% exact replica of what the user sees on screen)
+  const targetElement =
+    document.getElementById(`${elementId}-frame`) ||
+    document.getElementById(elementId) ||
+    (student ? document.getElementById(`kayan-digital-ticket-${student.id}-frame`) : null) ||
+    (student ? document.getElementById(`kayan-digital-ticket-${student.id}`) : null);
 
-    return new Promise((resolve) => {
-      canvas.toBlob((blob) => {
-        if (blob) {
+  if (targetElement) {
+    try {
+      if (typeof document !== 'undefined' && document.fonts) {
+        try {
+          await document.fonts.ready;
+        } catch (_) {}
+      }
+
+      const domImages = Array.from(targetElement.querySelectorAll('img'));
+      await Promise.all(
+        domImages.map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) return resolve(true);
+              img.onload = () => resolve(true);
+              img.onerror = () => resolve(true);
+            })
+        )
+      );
+
+      // Method 1: Native SVG-based high-fidelity export using html-to-image toBlob (Preserves CSS gradients, fonts, shadows)
+      try {
+        const blob = await htmlToImageToBlob(targetElement, {
+          pixelRatio: 2.5,
+          backgroundColor: '#060913',
+          skipFonts: true,
+          cacheBust: true,
+        });
+
+        if (blob && blob.size > 0) {
           triggerFileDownload(blob, downloadFileName);
-          resolve(true);
-        } else {
-          const image = canvas.toDataURL('image/png');
-          triggerFileDownload(image, downloadFileName);
-          resolve(true);
+          return true;
         }
-      }, 'image/png', 1.0);
-    });
-  } catch (err) {
-    console.error('Error exporting ticket element as PNG:', err);
-    return false;
+      } catch (blobErr) {
+        console.warn('html-to-image toBlob error, falling back to toCanvas:', blobErr);
+      }
+
+      // Method 2: html-to-image toCanvas
+      try {
+        const canvas = await htmlToImageToCanvas(targetElement, {
+          pixelRatio: 2.5,
+          backgroundColor: '#060913',
+          skipFonts: true,
+          cacheBust: true,
+        });
+
+        if (canvas && canvas.width > 0) {
+          return new Promise((resolve) => {
+            canvas.toBlob((blob) => {
+              if (blob) {
+                triggerFileDownload(blob, downloadFileName);
+                resolve(true);
+              } else {
+                const imgData = canvas.toDataURL('image/png');
+                triggerFileDownload(imgData, downloadFileName);
+                resolve(true);
+              }
+            }, 'image/png', 1.0);
+          });
+        }
+      } catch (canvasErr) {
+        console.warn('html-to-image toCanvas error, trying html2canvas:', canvasErr);
+      }
+
+      // Method 3: html2canvas with sanitized styles
+      const canvas = await html2canvas(targetElement, {
+        scale: 2.5,
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: '#060913',
+        logging: false,
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: 1024,
+        onclone: (clonedDoc) => {
+          const frame = clonedDoc.getElementById(`${elementId}-frame`);
+          if (frame) {
+            frame.style.width = '750px';
+            frame.style.maxWidth = '750px';
+            frame.style.minWidth = '750px';
+            frame.style.margin = '0 auto';
+            frame.style.backgroundColor = '#060913';
+          }
+          sanitizeClonedDoc(clonedDoc);
+        },
+      });
+
+      return new Promise((resolve) => {
+        canvas.toBlob((blob) => {
+          if (blob) {
+            triggerFileDownload(blob, downloadFileName);
+            resolve(true);
+          } else {
+            const image = canvas.toDataURL('image/png');
+            triggerFileDownload(image, downloadFileName);
+            resolve(true);
+          }
+        }, 'image/png', 1.0);
+      });
+    } catch (err) {
+      console.error('Error capturing DOM element for ticket PNG:', err);
+    }
   }
+
+  // 2. Fallback: If DOM element is not mounted, use high-definition standalone pass
+  if (student && settings) {
+    try {
+      const fbCanvas = await generateStudentTicketCanvas(student, settings, elementId);
+      if (fbCanvas && fbCanvas.width > 0) {
+        return new Promise((resolve) => {
+          fbCanvas.toBlob((blob) => {
+            if (blob) {
+              triggerFileDownload(blob, downloadFileName);
+              resolve(true);
+            } else {
+              const image = fbCanvas.toDataURL('image/png');
+              triggerFileDownload(image, downloadFileName);
+              resolve(true);
+            }
+          }, 'image/png', 1.0);
+        });
+      }
+    } catch (canvasErr) {
+      console.warn('generateStudentTicketCanvas fallback error:', canvasErr);
+    }
+  }
+
+  return false;
 };
 
 /**
  * Copy visual ticket element image to clipboard so operator can hit Ctrl+V directly in WhatsApp Web
  */
-export const copyTicketElementToClipboard = async (elementId: string): Promise<boolean> => {
-  const element = document.getElementById(elementId);
-  if (!element) return false;
-  try {
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      backgroundColor: null,
-      logging: false,
-      onclone: sanitizeClonedDoc,
-    });
+export const copyTicketElementToClipboard = async (
+  elementId: string,
+  student?: Student,
+  settings?: TripSettings
+): Promise<boolean> => {
+  let canvas: HTMLCanvasElement | null = null;
 
-    return new Promise((resolve) => {
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          resolve(false);
-          return;
-        }
+  // 1. Direct DOM Element capture to guarantee identical visual presentation
+  const targetElement =
+    document.getElementById(`${elementId}-frame`) ||
+    document.getElementById(elementId) ||
+    (student ? document.getElementById(`kayan-digital-ticket-${student.id}-frame`) : null) ||
+    (student ? document.getElementById(`kayan-digital-ticket-${student.id}`) : null);
+
+  if (targetElement) {
+    try {
+      if (typeof document !== 'undefined' && document.fonts) {
         try {
-          if (navigator.clipboard && window.ClipboardItem) {
-            await navigator.clipboard.write([
-              new ClipboardItem({ 'image/png': blob }),
-            ]);
-            resolve(true);
-          } else {
-            resolve(false);
-          }
-        } catch (e) {
-          console.error('Clipboard write error:', e);
+          await document.fonts.ready;
+        } catch (_) {}
+      }
+
+      const domImages = Array.from(targetElement.querySelectorAll('img'));
+      await Promise.all(
+        domImages.map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) return resolve(true);
+              img.onload = () => resolve(true);
+              img.onerror = () => resolve(true);
+            })
+        )
+      );
+
+      // Try html-to-image first
+      try {
+        canvas = await htmlToImageToCanvas(targetElement, {
+          pixelRatio: 2.5,
+          backgroundColor: '#060913',
+          skipFonts: true,
+          cacheBust: true,
+        });
+      } catch (htiErr) {
+        console.warn('html-to-image for clipboard failed, trying html2canvas:', htiErr);
+      }
+
+      if (!canvas) {
+        canvas = await html2canvas(targetElement, {
+          scale: 2.5,
+          useCORS: true,
+          allowTaint: false,
+          backgroundColor: '#060913',
+          logging: false,
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: 1024,
+          onclone: (clonedDoc) => {
+            const frame = clonedDoc.getElementById(`${elementId}-frame`);
+            if (frame) {
+              frame.style.width = '750px';
+              frame.style.maxWidth = '750px';
+              frame.style.minWidth = '750px';
+              frame.style.margin = '0 auto';
+              frame.style.backgroundColor = '#060913';
+            }
+            sanitizeClonedDoc(clonedDoc);
+          },
+        });
+      }
+    } catch (err) {
+      console.error('Error copying ticket DOM element:', err);
+    }
+  }
+
+  // 2. Fallback to ticket canvas if element is not in DOM
+  if (!canvas && student && settings) {
+    try {
+      canvas = await generateStudentTicketCanvas(student, settings, elementId);
+    } catch (_) {}
+  }
+
+  if (!canvas) return false;
+
+  return new Promise((resolve) => {
+    canvas!.toBlob(async (blob) => {
+      if (!blob) {
+        resolve(false);
+        return;
+      }
+      try {
+        if (navigator.clipboard && window.ClipboardItem) {
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob }),
+          ]);
+          resolve(true);
+        } else {
           resolve(false);
         }
-      });
+      } catch (e) {
+        console.error('Clipboard write error:', e);
+        resolve(false);
+      }
     });
-  } catch (err) {
-    console.error('Error copying ticket image:', err);
-    return false;
-  }
+  });
 };
 
 /**
@@ -2753,11 +3145,17 @@ export const generateBusManifestPDF = async (
   try {
     const canvas = await html2canvas(container, {
       scale: 2,
+      width: 1200,
+      windowWidth: 1200,
+      scrollX: 0,
+      scrollY: 0,
       backgroundColor: '#ffffff',
       useCORS: true,
       allowTaint: false,
       logging: false,
-      onclone: sanitizeClonedDoc,
+      onclone: (clonedDoc) => {
+        sanitizeClonedDoc(clonedDoc);
+      },
     });
 
     const imgData = canvas.toDataURL('image/png');

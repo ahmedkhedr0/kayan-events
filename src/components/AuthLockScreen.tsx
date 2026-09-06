@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { StaffAccount, ActiveUserSession, DEFAULT_ROLE_PERMISSIONS } from '../types';
 import kayanLogoImg from '../assets/images/kayan_events_logo_1787933987535.jpg';
+import { AbstractParticlesCanvas } from './AbstractParticlesCanvas';
 
 interface AuthLockScreenProps {
   staffAccounts: StaffAccount[];
@@ -38,7 +39,7 @@ interface AuthLockScreenProps {
 export const AuthLockScreen: React.FC<AuthLockScreenProps> = ({
   staffAccounts,
   tripName,
-  destination,
+  destination: _destination,
   supportPhone = '01023456789',
   onAuthenticate,
   onBlockedAttempt,
@@ -152,7 +153,7 @@ export const AuthLockScreen: React.FC<AuthLockScreenProps> = ({
   const handleSendAdminAlert = (e: React.FormEvent) => {
     e.preventDefault();
     const requesterName = staffNameInput.trim() || 'عضو في طاقم العمل';
-    
+
     // Format WhatsApp message for direct dispatch
     const cleanPhone = supportPhone.replace(/[^0-9]/g, '');
     const formattedPhone = cleanPhone.startsWith('0') ? `20${cleanPhone.slice(1)}` : cleanPhone;
@@ -175,6 +176,9 @@ export const AuthLockScreen: React.FC<AuthLockScreenProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center p-3 sm:p-6 relative overflow-hidden selection:bg-amber-500 selection:text-slate-950 font-sans pt-16 sm:pt-6">
+      {/* Interactive Abstract Particles Background */}
+      <AbstractParticlesCanvas particleCount={65} interactiveRadius={135} connectDistance={110} />
+
       {/* Ambient Lighting FX */}
       <div className="absolute -top-40 -left-40 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
       <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none"></div>
@@ -227,7 +231,6 @@ export const AuthLockScreen: React.FC<AuthLockScreenProps> = ({
           المنظومة السحابية المتكاملة لإدارة وتنظيم رحلات الشباب والجامعات
         </p>
       </div>
-
 
       {/* Main PIN Authentication Box */}
       <div className="relative z-10 w-full max-w-md bg-slate-900/90 backdrop-blur-xl border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl shadow-black/60">

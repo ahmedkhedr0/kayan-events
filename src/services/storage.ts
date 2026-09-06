@@ -33,6 +33,47 @@ const KEYS = {
   ACTIVE_USER_SESSION: 'kayan_user_session_clean_v1',
   ACTIVITY_LOGS: 'kayan_activity_logs_clean_v1',
   LEGACY_STUDENTS: 'kayan_students_v1',
+  DELETED_TRIP_IDS: 'kayan_deleted_trip_ids_v1',
+};
+
+export const getDeletedTripIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(KEYS.DELETED_TRIP_IDS);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+};
+
+export const recordDeletedTripId = (tripId: string): void => {
+  if (!tripId) return;
+  try {
+    const current = getDeletedTripIds();
+    current.add(tripId);
+    localStorage.setItem(KEYS.DELETED_TRIP_IDS, JSON.stringify(Array.from(current)));
+  } catch (e) {
+    console.error('Error saving deleted trip id to localStorage:', e);
+  }
+};
+
+export const recordDeletedTripIds = (tripIds: string[]): void => {
+  if (!Array.isArray(tripIds) || tripIds.length === 0) return;
+  try {
+    const current = getDeletedTripIds();
+    tripIds.forEach((id) => {
+      if (id) current.add(id);
+    });
+    localStorage.setItem(KEYS.DELETED_TRIP_IDS, JSON.stringify(Array.from(current)));
+  } catch (e) {
+    console.error('Error saving deleted trip ids to localStorage:', e);
+  }
+};
+
+export const isTripDeleted = (tripId: string): boolean => {
+  if (!tripId) return false;
+  return getDeletedTripIds().has(tripId);
 };
 
 // Automatic cleanup of legacy mock/dummy data from previous versions
@@ -188,7 +229,64 @@ export const saveActiveUserSession = (session: import('../types').ActiveUserSess
 // ==========================================
 // ACTIVITY LOGS SYSTEM (سجل النشاط المتقدم)
 // ==========================================
-export const initialActivityLogs: import('../types').ActivityLog[] = [];
+export const initialActivityLogs: import('../types').ActivityLog[] = [
+  {
+    id: 'log-seed-1',
+    timestamp: Date.now() - 1000 * 60 * 5,
+    dateString: new Date().toISOString().split('T')[0],
+    timeString: new Date(Date.now() - 1000 * 60 * 5).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    dayName: 'اليوم',
+    userName: 'المدير العام (الأدمن)',
+    userRole: 'admin',
+    actionType: 'login',
+    actionTitle: 'تسجيل دخول موظف للنظام 🔐',
+    details: 'تم تسجيل دخول المدير العام برتبة [👑 المدير العام (الأدمن)] وتفعيل جلسة العمل المشفرة بنجاح.',
+    tripName: 'رحلة جديدة',
+  },
+  {
+    id: 'log-seed-2',
+    timestamp: Date.now() - 1000 * 60 * 15,
+    dateString: new Date().toISOString().split('T')[0],
+    timeString: new Date(Date.now() - 1000 * 60 * 15).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    dayName: 'اليوم',
+    userName: 'كابتن / أحمد مشرف',
+    userRole: 'field_supervisor',
+    actionType: 'checkin_departure',
+    actionTitle: 'تسجيل حضور وصعود الحافلة 🚌',
+    details: 'تم تأكيد حضور وصعود المشتركين عند نقطة التجمع الرئيسية على حافلة #1.',
+    targetName: 'أحمد محمود',
+    busNumber: 1,
+    tripName: 'رحلة جديدة',
+  },
+  {
+    id: 'log-seed-3',
+    timestamp: Date.now() - 1000 * 60 * 25,
+    dateString: new Date().toISOString().split('T')[0],
+    timeString: new Date(Date.now() - 1000 * 60 * 25).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    dayName: 'اليوم',
+    userName: 'سارة - علاقات عامة',
+    userRole: 'pr_ticketing',
+    actionType: 'tshirt_delivery',
+    actionTitle: 'تسليم التيشرت الرسمي 👕',
+    details: 'تم تسليم تيشرت الرحلة الرسمي (مقاس L) للمشترك وتأكيد استلام المتعلقات.',
+    targetName: 'سارة خالد',
+    busNumber: 1,
+    tripName: 'رحلة جديدة',
+  },
+  {
+    id: 'log-seed-4',
+    timestamp: Date.now() - 1000 * 60 * 40,
+    dateString: new Date().toISOString().split('T')[0],
+    timeString: new Date(Date.now() - 1000 * 60 * 40).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    dayName: 'اليوم',
+    userName: 'المدير العام (الأدمن)',
+    userRole: 'admin',
+    actionType: 'staff_update',
+    actionTitle: 'تعديل وإدارة حسابات الموظفين 👥',
+    details: 'تم تحديث قائمة الموظفين وتفعيل صلاحيات المشرفين الميدانيين والعلاقات العامة.',
+    tripName: 'رحلة جديدة',
+  },
+];
 
 export const loadActivityLogs = (): import('../types').ActivityLog[] => {
   try {
@@ -203,7 +301,7 @@ export const loadActivityLogs = (): import('../types').ActivityLog[] => {
 
 export const saveActivityLogs = (logs: import('../types').ActivityLog[]) => {
   try {
-    localStorage.setItem(KEYS.ACTIVITY_LOGS, JSON.stringify(logs.slice(0, 500))); // Keep up to 500 logs
+    localStorage.setItem(KEYS.ACTIVITY_LOGS, JSON.stringify(logs.slice(0, 1000))); // Keep up to 1000 logs
   } catch (err) {
     console.error('Failed to save activity logs:', err);
   }
@@ -211,8 +309,13 @@ export const saveActivityLogs = (logs: import('../types').ActivityLog[]) => {
 
 // Clean initial trip ready for user input
 const createInitialTrips = (): Trip[] => {
+  const deleted = getDeletedTripIds();
+  let baseId = 'trip-1';
+  if (deleted.has(baseId)) {
+    baseId = `trip-${Date.now()}`;
+  }
   const trip1: Trip = {
-    id: 'trip-1',
+    id: baseId,
     status: 'active',
     createdAt: new Date().toISOString().split('T')[0],
     students: [],
@@ -225,7 +328,7 @@ const createInitialTrips = (): Trip[] => {
     notices: [],
     settings: {
       ...initialTripSettings,
-      tripName: 'رحلة العمل الأولى',
+      tripName: 'رحلة جديدة',
     },
   };
 
@@ -258,16 +361,27 @@ export const saveState = <T>(key: string, data: T): void => {
 };
 
 export const loadTrips = (): Trip[] => {
-  return loadState<Trip[]>(KEYS.TRIPS, createInitialTrips());
+  const allTrips = loadState<Trip[]>(KEYS.TRIPS, createInitialTrips());
+  const deletedIds = getDeletedTripIds();
+  const validTrips = allTrips.filter((t) => t && t.id && !deletedIds.has(t.id));
+  return validTrips.length > 0 ? validTrips : createInitialTrips();
 };
 
 export const saveTrips = (trips: Trip[]): void => {
-  saveState(KEYS.TRIPS, trips);
+  const deletedIds = getDeletedTripIds();
+  const validTrips = trips.filter((t) => t && t.id && !deletedIds.has(t.id));
+  saveState(KEYS.TRIPS, validTrips);
 };
 
 export const loadActiveTripId = (trips: Trip[]): string => {
-  const defaultId = trips[0]?.id || 'trip-1';
-  return loadState<string>(KEYS.ACTIVE_TRIP_ID, defaultId);
+  const deletedIds = getDeletedTripIds();
+  const validTrips = trips.filter((t) => t && t.id && !deletedIds.has(t.id));
+  const defaultId = validTrips[0]?.id || 'trip-1';
+  const saved = loadState<string>(KEYS.ACTIVE_TRIP_ID, defaultId);
+  if (deletedIds.has(saved)) {
+    return defaultId;
+  }
+  return saved;
 };
 
 export const saveActiveTripId = (id: string): void => {

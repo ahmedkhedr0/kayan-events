@@ -3,11 +3,14 @@ import {
   doc,
   setDoc,
   deleteDoc,
+  getDocs,
   onSnapshot,
   setLogLevel,
+  arrayUnion,
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { Trip, CompanyTreasury, StaffAccount } from '../types';
+import { Trip, CompanyTreasury, StaffAccount, ActivityLog } from '../types';
+import { getDeletedTripIds, recordDeletedTripId, recordDeletedTripIds, isTripDeleted } from './storage';
 
 // Silence verbose internal Firebase SDK backoff logs
 try {
@@ -17,37 +20,16 @@ try {
 const TRIPS_COLLECTION = 'trips';
 const GLOBAL_DOC = doc(db, 'app_config', 'global');
 
-let isInitialTripsUploadDone = true;
-let isInitialGlobalUploadDone = true;
+let isInitialTripsUploadDone = false;
+let isInitialGlobalUploadDone = false;
 
 // Per-trip content cache to prevent redundant writes
 const syncedTripHashCache = new Map<string, string>();
 let syncedGlobalHash = '';
 
-// Quota exhaustion circuit breaker persisted in localStorage (24-hour daily quota cycle)
-const QUOTA_STORAGE_KEY = 'kayan_firestore_quota_exceeded';
-const QUOTA_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours daily cooldown
-
-const getStoredQuotaTimestamp = (): number => {
-  try {
-    const val = localStorage.getItem(QUOTA_STORAGE_KEY);
-    return val ? parseInt(val, 10) || 0 : 0;
-  } catch {
-    return 0;
-  }
-};
-
-let quotaExceededTimestamp = getStoredQuotaTimestamp();
-let isQuotaExceeded =
-  quotaExceededTimestamp > 0 && Date.now() - quotaExceededTimestamp < QUOTA_COOLDOWN_MS;
-
-// If we already know quota is exceeded from previous session, ensure flag is set
-if (quotaExceededTimestamp > 0 && Date.now() - quotaExceededTimestamp < QUOTA_COOLDOWN_MS) {
-  isQuotaExceeded = true;
-}
-
 type QuotaListener = (exceeded: boolean) => void;
 const quotaListeners: Set<QuotaListener> = new Set();
+let isQuotaExceeded = false;
 
 export const subscribeToQuotaStatus = (listener: QuotaListener) => {
   quotaListeners.add(listener);
@@ -58,11 +40,7 @@ export const subscribeToQuotaStatus = (listener: QuotaListener) => {
 };
 
 export const resetQuotaCooldown = () => {
-  quotaExceededTimestamp = 0;
   isQuotaExceeded = false;
-  try {
-    localStorage.removeItem(QUOTA_STORAGE_KEY);
-  } catch {}
   notifyQuotaStatus(false);
 };
 
@@ -84,27 +62,11 @@ const checkAndHandleError = (err: any) => {
     errorMsg.includes('Quota limit exceeded') ||
     errorMsg.includes('quota')
   ) {
-    quotaExceededTimestamp = Date.now();
-    try {
-      localStorage.setItem(QUOTA_STORAGE_KEY, String(quotaExceededTimestamp));
-    } catch {}
     notifyQuotaStatus(true);
-    console.warn(
-      '⚠️ Firestore Free Daily Quota reached. System seamlessly running in offline high-speed storage mode.'
-    );
+    console.warn('⚠️ Firestore Free Daily Quota reached.');
     return true;
   }
   return false;
-};
-
-const shouldSkipCloudWrite = () => {
-  if (!isQuotaExceeded) return false;
-  // If 24h cooldown passed, allow one trial write
-  if (Date.now() - quotaExceededTimestamp > QUOTA_COOLDOWN_MS) {
-    resetQuotaCooldown();
-    return false;
-  }
-  return true;
 };
 
 /**
@@ -145,12 +107,17 @@ export const subscribeToTrips = (
   const unsubscribe = onSnapshot(
     tripsRef,
     async (snapshot) => {
+      const deletedIds = getDeletedTripIds();
+      const validFallback = (initialTripsFallback || []).filter(
+        (t) => t && t.id && !deletedIds.has(t.id) && !isTripDeleted(t.id)
+      );
+
       if (snapshot.empty && !isInitialTripsUploadDone) {
         isInitialTripsUploadDone = true;
-        if (!shouldSkipCloudWrite()) {
-          await syncAllTripsToCloud(initialTripsFallback);
+        if (validFallback.length > 0) {
+          await syncAllTripsToCloud(validFallback);
+          onTripsUpdate(validFallback);
         }
-        onTripsUpdate(initialTripsFallback);
         return;
       }
 
@@ -161,8 +128,15 @@ export const subscribeToTrips = (
 
         snapshot.forEach((docSnap) => {
           const tripData = docSnap.data() as Trip;
-          if (dummyTripIds.includes(docSnap.id) || (tripData.settings?.tripName && tripData.settings.tripName.includes('قرية أثينا باي'))) {
-            // Delete legacy mock trip from Firestore
+          const isMarkedDeleted = deletedIds.has(docSnap.id) || isTripDeleted(docSnap.id);
+
+          if (
+            dummyTripIds.includes(docSnap.id) ||
+            isMarkedDeleted ||
+            docSnap.id === 'trip-1785003236830' ||
+            (tripData.settings?.tripName && tripData.settings.tripName.includes('قرية أثينا باي'))
+          ) {
+            // Delete legacy mock or permanently deleted trip from Firestore
             deleteTripFromCloud(docSnap.id);
           } else {
             cloudTrips.push(tripData);
@@ -171,10 +145,10 @@ export const subscribeToTrips = (
         });
 
         if (cloudTrips.length === 0) {
-          if (!shouldSkipCloudWrite()) {
-            await syncAllTripsToCloud(initialTripsFallback);
+          if (validFallback.length > 0) {
+            await syncAllTripsToCloud(validFallback);
+            onTripsUpdate(validFallback);
           }
-          onTripsUpdate(initialTripsFallback);
           return;
         }
 
@@ -185,7 +159,7 @@ export const subscribeToTrips = (
     },
     (error) => {
       checkAndHandleError(error);
-      console.warn('Firestore trips subscription (using offline local storage):', error?.message || error);
+      console.warn('Firestore trips subscription error:', error?.message || error);
     }
   );
 
@@ -193,26 +167,40 @@ export const subscribeToTrips = (
 };
 
 /**
- * Subscribe to real-time updates for Global App State (activeTripId, Treasury, and Staff Accounts).
+ * Subscribe to real-time updates for Global App State (activeTripId, Treasury, Staff Accounts, Activity Logs, and Deleted Trip IDs).
  */
 export const subscribeToGlobalState = (
-  onStateUpdate: (data: { activeTripId?: string; treasury?: CompanyTreasury; staffAccounts?: StaffAccount[] }) => void,
+  onStateUpdate: (data: {
+    activeTripId?: string;
+    treasury?: CompanyTreasury;
+    staffAccounts?: StaffAccount[];
+    activityLogs?: ActivityLog[];
+    deletedTripIds?: string[];
+  }) => void,
   initialActiveTripId: string,
   initialTreasury: CompanyTreasury,
-  initialStaffAccounts?: StaffAccount[]
+  initialStaffAccounts?: StaffAccount[],
+  initialActivityLogs?: ActivityLog[]
 ) => {
   const unsubscribe = onSnapshot(
     GLOBAL_DOC,
     async (docSnap) => {
       if (!docSnap.exists() && !isInitialGlobalUploadDone) {
         isInitialGlobalUploadDone = true;
-        if (!shouldSkipCloudWrite()) {
-          await syncGlobalStateToCloud(initialActiveTripId, initialTreasury, initialStaffAccounts);
-        }
+        const currentDeleted = Array.from(getDeletedTripIds());
+        await syncGlobalStateToCloud(
+          initialActiveTripId,
+          initialTreasury,
+          initialStaffAccounts,
+          initialActivityLogs,
+          currentDeleted
+        );
         onStateUpdate({
           activeTripId: initialActiveTripId,
           treasury: initialTreasury,
           staffAccounts: initialStaffAccounts,
+          activityLogs: initialActivityLogs,
+          deletedTripIds: currentDeleted,
         });
         return;
       }
@@ -225,20 +213,33 @@ export const subscribeToGlobalState = (
           const hasDummy = sanitizedTreasury.transfers.some((t: any) => t.id === 'trf-001' || t.id === 'trf-002');
           if (hasDummy) {
             sanitizedTreasury = { currentBalance: 0, transfers: [] };
-            syncGlobalStateToCloud(data.activeTripId || initialActiveTripId, sanitizedTreasury, data.staffAccounts);
+            syncGlobalStateToCloud(
+              data.activeTripId || initialActiveTripId,
+              sanitizedTreasury,
+              data.staffAccounts,
+              data.activityLogs,
+              data.deletedTripIds
+            );
           }
         }
+
+        if (Array.isArray(data.deletedTripIds) && data.deletedTripIds.length > 0) {
+          recordDeletedTripIds(data.deletedTripIds);
+        }
+
         syncedGlobalHash = JSON.stringify({ ...data, treasury: sanitizedTreasury });
         onStateUpdate({
           activeTripId: data.activeTripId,
           treasury: sanitizedTreasury,
           staffAccounts: data.staffAccounts,
+          activityLogs: data.activityLogs,
+          deletedTripIds: data.deletedTripIds,
         });
       }
     },
     (error) => {
       checkAndHandleError(error);
-      console.warn('Firestore global state subscription (using offline local storage):', error?.message || error);
+      console.warn('Firestore global state subscription error:', error?.message || error);
     }
   );
 
@@ -246,12 +247,18 @@ export const subscribeToGlobalState = (
 };
 
 /**
- * Save single trip or list of trips to Firestore (only writes if changed)
+ * Save single trip or list of trips to Firestore (only writes if changed and NOT deleted)
  */
 export const syncTripToCloud = async (trip: Trip) => {
   try {
     if (!trip || !trip.id) return;
-    if (shouldSkipCloudWrite()) return;
+    if (isTripDeleted(trip.id)) {
+      console.warn(`[Sync Shield] Skipping upload of deleted trip: ${trip.id}`);
+      // Ensure it is purged from Firestore
+      const tripDocRef = doc(db, TRIPS_COLLECTION, trip.id);
+      await deleteDoc(tripDocRef).catch(() => {});
+      return;
+    }
 
     const currentHash = JSON.stringify(trip);
     if (syncedTripHashCache.get(trip.id) === currentHash) {
@@ -272,9 +279,12 @@ export const syncTripToCloud = async (trip: Trip) => {
 export const syncAllTripsToCloud = async (trips: Trip[]) => {
   try {
     if (!Array.isArray(trips) || trips.length === 0) return;
-    if (shouldSkipCloudWrite()) return;
+    const deletedIds = getDeletedTripIds();
 
     for (const trip of trips) {
+      if (!trip || !trip.id || deletedIds.has(trip.id) || isTripDeleted(trip.id)) {
+        continue;
+      }
       await syncTripToCloud(trip);
     }
   } catch (err) {
@@ -287,11 +297,24 @@ export const syncAllTripsToCloud = async (trips: Trip[]) => {
 export const deleteTripFromCloud = async (tripId: string) => {
   try {
     if (!tripId) return;
+    recordDeletedTripId(tripId);
     syncedTripHashCache.delete(tripId);
-    if (shouldSkipCloudWrite()) return;
 
     const tripDocRef = doc(db, TRIPS_COLLECTION, tripId);
-    await deleteDoc(tripDocRef);
+    await deleteDoc(tripDocRef).catch(() => {});
+
+    // Permanently record deletion tombstone in Firestore app_config/global
+    try {
+      await setDoc(
+        GLOBAL_DOC,
+        {
+          deletedTripIds: arrayUnion(tripId),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.warn('Could not record deletedTripId in global Firestore doc:', e);
+    }
   } catch (err) {
     if (!checkAndHandleError(err)) {
       console.error('Error deleting trip from Firestore:', err);
@@ -300,20 +323,39 @@ export const deleteTripFromCloud = async (tripId: string) => {
 };
 
 /**
- * Save activeTripId, treasury, and staff accounts to Firestore
+ * Delete all trips from Firestore collection to ensure a fresh, clean reset
+ */
+export const clearAllTripsFromCloud = async () => {
+  try {
+    syncedTripHashCache.clear();
+    const tripsRef = collection(db, TRIPS_COLLECTION);
+    const snapshot = await getDocs(tripsRef);
+    const deletePromises = snapshot.docs.map((docSnap) => deleteDoc(doc(db, TRIPS_COLLECTION, docSnap.id)));
+    await Promise.all(deletePromises);
+  } catch (err) {
+    if (!checkAndHandleError(err)) {
+      console.error('Error clearing all trips from Firestore:', err);
+    }
+  }
+};
+
+/**
+ * Save activeTripId, treasury, staff accounts, activity logs, and deletedTripIds to Firestore
  */
 export const syncGlobalStateToCloud = async (
   activeTripId?: string,
   treasury?: CompanyTreasury,
-  staffAccounts?: StaffAccount[]
+  staffAccounts?: StaffAccount[],
+  activityLogs?: ActivityLog[],
+  deletedTripIds?: string[]
 ) => {
   try {
-    if (shouldSkipCloudWrite()) return;
-
     const payload: Record<string, any> = {};
     if (activeTripId !== undefined) payload.activeTripId = activeTripId;
     if (treasury !== undefined) payload.treasury = sanitizeForFirestore(treasury);
     if (staffAccounts !== undefined) payload.staffAccounts = sanitizeForFirestore(staffAccounts);
+    if (activityLogs !== undefined) payload.activityLogs = sanitizeForFirestore(activityLogs.slice(0, 300));
+    if (deletedTripIds !== undefined) payload.deletedTripIds = sanitizeForFirestore(deletedTripIds);
 
     if (Object.keys(payload).length > 0) {
       const currentGlobalHash = JSON.stringify(payload);

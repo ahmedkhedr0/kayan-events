@@ -43,6 +43,7 @@ import {
   ActivityLog,
   ActivityActionType,
 } from './types';
+import { numberToArabicWords } from './components/ContractsReceipts';
 
 import {
   loadTrips,
@@ -58,16 +59,24 @@ import {
   loadActivityLogs,
   saveActivityLogs,
   resetToDefaults,
+  recordDeletedTripId,
+  recordDeletedTripIds,
+  getDeletedTripIds,
+  isTripDeleted,
 } from './services/storage';
 
 import {
   subscribeToTrips,
   subscribeToGlobalState,
   syncAllTripsToCloud,
+  deleteTripFromCloud,
+  clearAllTripsFromCloud,
   syncGlobalStateToCloud,
   subscribeToQuotaStatus,
   resetQuotaCooldown,
 } from './services/firebaseSync';
+
+import { broadcastTabMessage, subscribeToTabSync } from './services/tabSync';
 
 export default function App() {
   // Multi-Trip and Treasury State
@@ -98,7 +107,10 @@ export default function App() {
   // Active Trip derived object
   const activeTrip = trips.find((t) => t.id === activeTripId) || trips[0] || loadTrips()[0];
 
-  // Global Activity Logger helper
+  // Ref to track recently added logs and prevent duplicate creation on load or double execution
+  const recentLogsTrackRef = React.useRef<Map<string, number>>(new Map());
+
+  // Global Activity Logger helper with deduplication and state integrity check
   const addLog = (
     actionType: ActivityActionType,
     actionTitle: string,
@@ -108,6 +120,25 @@ export default function App() {
     busNumber?: number,
     metadata?: Record<string, unknown>
   ) => {
+    const nowTime = Date.now();
+    // Create signature to detect duplicate calls within 1500ms window
+    const signature = `${actionType}-${actionTitle}-${details}-${targetId || ''}-${targetName || ''}`;
+    const lastLoggedAt = recentLogsTrackRef.current.get(signature);
+
+    if (lastLoggedAt && nowTime - lastLoggedAt < 1500) {
+      // Prevent duplicate logging within 1.5 seconds
+      return;
+    }
+    recentLogsTrackRef.current.set(signature, nowTime);
+
+    // Prune track cache if too large
+    if (recentLogsTrackRef.current.size > 200) {
+      const cutoff = nowTime - 30000;
+      recentLogsTrackRef.current.forEach((timestamp, key) => {
+        if (timestamp < cutoff) recentLogsTrackRef.current.delete(key);
+      });
+    }
+
     const now = new Date();
     const dayNames = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
     const newLog: ActivityLog = {
@@ -130,6 +161,20 @@ export default function App() {
     };
 
     setActivityLogs((prev) => {
+      // Check if identical log exists in the top 3 items to avoid duplicates during rapid load or remounts
+      if (prev.length > 0) {
+        const top = prev[0];
+        const prevTime = typeof top.timestamp === 'number' ? top.timestamp : Number(top.timestamp) || 0;
+        const newTime = typeof newLog.timestamp === 'number' ? newLog.timestamp : Number(newLog.timestamp) || 0;
+        if (
+          top.actionType === actionType &&
+          top.actionTitle === actionTitle &&
+          top.details === details &&
+          Math.abs(prevTime - newTime) < 2000
+        ) {
+          return prev;
+        }
+      }
       const updated = [newLog, ...prev].slice(0, 1000);
       saveActivityLogs(updated);
       return updated;
@@ -146,15 +191,32 @@ export default function App() {
   const [isQuotaBannerDismissed, setIsQuotaBannerDismissed] = useState(false);
 
   // Guard against bidirectional echo loop between Firestore snapshot and local state
-  const isIncomingRemoteUpdateRef = React.useRef(false);
+  const isIncomingRemoteTripsRef = React.useRef(false);
+  const isIncomingRemoteGlobalRef = React.useRef(false);
   const lastSyncedTripsJsonRef = React.useRef(JSON.stringify(trips));
-  const lastSyncedGlobalJsonRef = React.useRef(JSON.stringify({ activeTripId, companyTreasury, staffAccounts }));
+  const lastSyncedGlobalJsonRef = React.useRef(JSON.stringify({ activeTripId, companyTreasury, staffAccounts, activityLogs }));
 
   // Save session & accounts
   const handleUserLogin = (session: ActiveUserSession) => {
     setUserSession(session);
     saveActiveUserSession(session);
     setIsAuthenticated(true);
+
+    const roleName =
+      session.role === 'admin'
+        ? '👑 المدير العام (الأدمن)'
+        : session.role === 'field_supervisor'
+        ? '🚌 مشرف ميداني'
+        : '🎫 علاقات عامة وحجوزات';
+
+    addLog(
+      'login',
+      'تسجيل دخول موظف للنظام 🔐',
+      `تم تسجيل دخول الموظف (${session.name}) برتبة [${roleName}] بنجاح${session.assignedBus ? ` - مخصص لحافلة #${session.assignedBus}` : ''}.`,
+      session.name,
+      undefined,
+      session.assignedBus
+    );
 
     // If user has granular trip permissions, ensure activeTripId matches an allowed trip
     if (session.role !== 'admin' && session.allowedTripIds && session.allowedTripIds.length > 0) {
@@ -168,13 +230,29 @@ export default function App() {
   };
 
   const handleLockApp = () => {
+    addLog(
+      'login',
+      'قفل شاشة النظام / تأمين الحساب 🔒',
+      `تم قفل شاشة النظام وتأمين الجلسة برمز PIN بواسطة (${userSession.name}).`,
+      userSession.name,
+      userSession.id,
+      userSession.assignedBus
+    );
     setIsAuthenticated(false);
   };
 
   const handleSaveStaffAccounts = (accounts: StaffAccount[]) => {
     setStaffAccounts(accounts);
     saveStaffAccounts(accounts);
-    syncGlobalStateToCloud(activeTripId, companyTreasury, accounts);
+    syncGlobalStateToCloud(activeTripId, companyTreasury, accounts, activityLogs);
+
+    addLog(
+      'staff_update',
+      'تعديل وإدارة حسابات الموظفين والصلاحيات 👥',
+      `تم تحديث قاعدة بيانات الموظفين (إجمالي ${accounts.length} حساب موظف) وتعيين الأذونات وأرقام PIN السرية.`,
+      userSession.name,
+      userSession.id
+    );
   };
 
   // Subscribe to real-time Cloud updates from Firebase Firestore with echo suppression
@@ -183,7 +261,7 @@ export default function App() {
       if (cloudTrips && cloudTrips.length > 0) {
         const newJson = JSON.stringify(cloudTrips);
         if (newJson !== lastSyncedTripsJsonRef.current) {
-          isIncomingRemoteUpdateRef.current = true;
+          isIncomingRemoteTripsRef.current = true;
           lastSyncedTripsJsonRef.current = newJson;
           setTrips(cloudTrips);
           saveTrips(cloudTrips);
@@ -195,8 +273,21 @@ export default function App() {
       (cloudState) => {
         const newGlobalJson = JSON.stringify(cloudState);
         if (newGlobalJson !== lastSyncedGlobalJsonRef.current) {
-          isIncomingRemoteUpdateRef.current = true;
+          isIncomingRemoteGlobalRef.current = true;
           lastSyncedGlobalJsonRef.current = newGlobalJson;
+
+          if (Array.isArray(cloudState.deletedTripIds) && cloudState.deletedTripIds.length > 0) {
+            recordDeletedTripIds(cloudState.deletedTripIds);
+            const deletedSet = new Set(cloudState.deletedTripIds);
+            setTrips((prevTrips) => {
+              const remaining = prevTrips.filter((t) => t && t.id && !deletedSet.has(t.id));
+              if (remaining.length !== prevTrips.length) {
+                saveTrips(remaining);
+                return remaining;
+              }
+              return prevTrips;
+            });
+          }
 
           if (cloudState.activeTripId) {
             setActiveTripId(cloudState.activeTripId);
@@ -210,21 +301,46 @@ export default function App() {
             setStaffAccounts(cloudState.staffAccounts);
             saveStaffAccounts(cloudState.staffAccounts);
           }
+          if (cloudState.activityLogs && cloudState.activityLogs.length > 0) {
+            setActivityLogs(cloudState.activityLogs);
+            saveActivityLogs(cloudState.activityLogs);
+          }
         }
       },
       activeTripId,
       companyTreasury,
-      staffAccounts
+      staffAccounts,
+      activityLogs
     );
 
     const unsubscribeQuota = subscribeToQuotaStatus((exceeded) => {
       setIsCloudQuotaExceeded(exceeded);
     });
 
+    const unsubscribeTabSync = subscribeToTabSync((msg) => {
+      if (msg.type === 'TRIP_DELETED') {
+        recordDeletedTripId(msg.tripId);
+        setTrips((prev) => {
+          const filtered = prev.filter((t) => t && t.id !== msg.tripId);
+          saveTrips(filtered);
+          return filtered;
+        });
+        setActiveTripId((prevId) => {
+          if (prevId === msg.tripId) {
+            const next = trips.find((t) => t.id !== msg.tripId)?.id || 'trip-1';
+            saveActiveTripId(next);
+            return next;
+          }
+          return prevId;
+        });
+      }
+    });
+
     return () => {
       unsubscribeTrips();
       unsubscribeGlobal();
       unsubscribeQuota();
+      unsubscribeTabSync();
     };
   }, []);
 
@@ -255,11 +371,11 @@ export default function App() {
     }
   };
 
-  // Sync state changes to local storage & Cloud Firestore with debouncing and echo suppression
+  // Sync state changes to local storage & Cloud Firestore with 50ms debouncing and echo suppression
   useEffect(() => {
     saveTrips(trips);
-    if (isIncomingRemoteUpdateRef.current) {
-      isIncomingRemoteUpdateRef.current = false;
+    if (isIncomingRemoteTripsRef.current) {
+      isIncomingRemoteTripsRef.current = false;
       return;
     }
 
@@ -269,7 +385,7 @@ export default function App() {
     const timer = setTimeout(() => {
       lastSyncedTripsJsonRef.current = currentJson;
       syncAllTripsToCloud(trips);
-    }, 600);
+    }, 50);
 
     return () => clearTimeout(timer);
   }, [trips]);
@@ -278,22 +394,23 @@ export default function App() {
     saveActiveTripId(activeTripId);
     saveTreasury(companyTreasury);
     saveStaffAccounts(staffAccounts);
+    saveActivityLogs(activityLogs);
 
-    if (isIncomingRemoteUpdateRef.current) {
-      isIncomingRemoteUpdateRef.current = false;
+    if (isIncomingRemoteGlobalRef.current) {
+      isIncomingRemoteGlobalRef.current = false;
       return;
     }
 
-    const currentGlobalJson = JSON.stringify({ activeTripId, companyTreasury, staffAccounts });
+    const currentGlobalJson = JSON.stringify({ activeTripId, companyTreasury, staffAccounts, activityLogs });
     if (currentGlobalJson === lastSyncedGlobalJsonRef.current) return;
 
     const timer = setTimeout(() => {
       lastSyncedGlobalJsonRef.current = currentGlobalJson;
-      syncGlobalStateToCloud(activeTripId, companyTreasury, staffAccounts);
-    }, 600);
+      syncGlobalStateToCloud(activeTripId, companyTreasury, staffAccounts, activityLogs);
+    }, 50);
 
     return () => clearTimeout(timer);
-  }, [activeTripId, companyTreasury, staffAccounts]);
+  }, [activeTripId, companyTreasury, staffAccounts, activityLogs]);
 
   // Helper to update current active trip state
   const updateActiveTrip = (updater: (prevTrip: Trip) => Trip) => {
@@ -306,26 +423,31 @@ export default function App() {
   const handleAddStudent = (newStudentData: Omit<Student, 'id' | 'ticketCode'>): Student => {
     const newStudent: Student = {
       ...newStudentData,
-      id: `std-${Date.now()}`,
+      id: `std-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       ticketCode: `KYN-${8500 + activeTrip.students.length + 1}`,
     };
+
     updateActiveTrip((prev) => ({
       ...prev,
       students: [newStudent, ...prev.students],
     }));
+
     addLog(
       'student_register',
-      'تسجيل مشترك جديد',
-      `تم تسجيل الطالب ${newStudent.name} بكود تذكرة ${newStudent.ticketCode} على باص ${newStudent.busNumber}.`,
+      'تسجيل مشترك جديد وإصدار تذكرة',
+      `تم تسجيل الطالب ${newStudent.name} بكود تذكرة ${newStudent.ticketCode} على باص ${newStudent.busNumber} مع سداد مبلغ ${(newStudent.paidAmount || 0).toLocaleString()} ج.م.`,
       newStudent.name,
       newStudent.id,
-      newStudent.busNumber
+      newStudent.busNumber,
+      { paidAmount: newStudent.paidAmount, totalAmount: newStudent.totalAmount, ticketCode: newStudent.ticketCode }
     );
+
     return newStudent;
   };
 
   const handleUpdateStudent = (updatedStudent: Student) => {
     const prevStudent = activeTrip.students.find((s) => s.id === updatedStudent.id);
+
     updateActiveTrip((prev) => ({
       ...prev,
       students: prev.students.map((s) => (s.id === updatedStudent.id ? updatedStudent : s)),
@@ -344,7 +466,7 @@ export default function App() {
       addLog(
         'student_update',
         'تحديث بيانات المشترك',
-        `تم تحديث بيانات الطالب ${updatedStudent.name} (حالة الدفع: ${updatedStudent.paymentStatus}).`,
+        `تم تحديث بيانات الطالب ${updatedStudent.name} (حالة الدفع: ${updatedStudent.paymentStatus} - المدفوع: ${updatedStudent.paidAmount} ج.م - المتبقي: ${updatedStudent.remainingAmount} ج.م).`,
         updatedStudent.name,
         updatedStudent.id,
         updatedStudent.busNumber
@@ -854,15 +976,41 @@ export default function App() {
       return;
     }
     const target = trips.find((t) => t.id === tripId);
+
+    // 1. Record in local tombstones immediately
+    recordDeletedTripId(tripId);
+
+    // 2. Broadcast to all open browser tabs immediately
+    broadcastTabMessage({ type: 'TRIP_DELETED', tripId });
+
+    // 3. Filter local state and save to local storage
     const filtered = trips.filter((t) => t.id !== tripId);
     setTrips(filtered);
+    saveTrips(filtered);
+
+    let nextActiveId = activeTripId;
     if (activeTripId === tripId) {
-      setActiveTripId(filtered[0].id);
+      nextActiveId = filtered[0]?.id || 'trip-1';
+      setActiveTripId(nextActiveId);
+      saveActiveTripId(nextActiveId);
     }
+
+    // 4. Delete document from Firestore and register in cloud tombstones
+    deleteTripFromCloud(tripId);
+
+    // 5. Sync global state with updated tombstones array
+    syncGlobalStateToCloud(
+      nextActiveId,
+      companyTreasury,
+      staffAccounts,
+      activityLogs,
+      Array.from(getDeletedTripIds())
+    );
+
     addLog(
       'trip_delete',
-      'حذف ملف رحلة',
-      `تم حذف ملف (${target?.settings?.tripName || tripId}) من النظام نهائياً.`,
+      'حذف ملف رحلة نهائياً',
+      `تم حذف ملف (${target?.settings?.tripName || tripId}) من النظام السحابي والمحلي نهائياً.`,
       target?.settings?.tripName,
       tripId
     );
@@ -938,12 +1086,19 @@ export default function App() {
   };
 
   // Reset
-  const handleResetData = () => {
-    if (confirm('هل أنت تأكد من إعادة ضبط كافة البيانات والرحلات للافتراضي؟')) {
+  const handleResetData = async () => {
+    if (confirm('تأكيد: هل أنت متأكد من تفريغ كافة البيانات والرحلات والحسابات والبدء بنظام فارغ تماماً؟')) {
+      await clearAllTripsFromCloud();
       const defaults = resetToDefaults();
       setTrips(defaults.trips);
       setActiveTripId(defaults.activeTripId);
       setCompanyTreasury(defaults.treasury);
+      setActivityLogs([]);
+      saveActivityLogs([]);
+
+      // Sync clean state to Firestore Cloud immediately
+      await syncAllTripsToCloud(defaults.trips);
+      await syncGlobalStateToCloud(defaults.activeTripId, defaults.treasury, staffAccounts, []);
     }
   };
 
@@ -952,10 +1107,20 @@ export default function App() {
       <>
         <AuthLockScreen
           staffAccounts={staffAccounts}
-          tripName={activeTrip?.settings?.tripName || 'رحلة دهب وسانت كاترين'}
+          tripName={activeTrip?.settings?.tripName || 'KAYAN Events'}
           destination={activeTrip?.settings?.destination || 'كيان Events'}
           supportPhone={activeTrip?.settings?.supportPhone || activeTrip?.settings?.companyPhone || '01023456789'}
           onAuthenticate={handleUserLogin}
+          onBlockedAttempt={(staff) => {
+            addLog(
+              'login_blocked',
+              'محاولة دخول بحساب موقوف / معطل ⛔',
+              `حاول الموظف (${staff.name}) الدخول برمز PIN ولكن حسابه موقوف حالياً (${staff.suspensionReason || 'موقوف إدارياً'}).`,
+              staff.name,
+              staff.id,
+              staff.assignedBus
+            );
+          }}
           onInstallPWA={handleInstallPWA}
         />
         <PWAInstallPromptModal
@@ -1052,17 +1217,20 @@ export default function App() {
               setTargetReminderTrip(activeTrip);
               setIsWhatsAppReminderOpen(true);
             }}
+            onOpenActivityLogs={() => setIsActivityLogsOpen(true)}
           />
         )}
 
         {activeTab === 'students' && (
           <StudentsCRM
             students={activeTrip.students}
+            receipts={activeTrip.receipts}
             settings={activeTrip.settings}
             userSession={userSession}
             onAddStudent={handleAddStudent}
             onUpdateStudent={handleUpdateStudent}
             onDeleteStudent={handleDeleteStudent}
+            onAddReceipt={handleAddReceipt}
             onOpenTicketPassModal={(student) => setSelectedStudentForPass(student)}
             onToggleMealReceived={handleToggleMealReceived}
             onToggleTShirtReceived={handleToggleTShirtReceived}
@@ -1093,6 +1261,7 @@ export default function App() {
             onAddDriver={handleAddDriver}
             onDeleteDriver={handleDeleteDriver}
             onUpdateStudent={handleUpdateStudent}
+            onAddReceipt={handleAddReceipt}
             onNavigateTab={(tab) => setActiveTab(tab)}
           />
         )}
