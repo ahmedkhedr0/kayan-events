@@ -12,7 +12,7 @@ export default defineConfig(() => {
       },
     },
     build: {
-      chunkSizeWarningLimit: 3000, // رفع حد التحذير ليستوعب حجم التطبيق المجمع
+      chunkSizeWarningLimit: 3000,
       rollupOptions: {
         output: {
           manualChunks(id) {
@@ -24,10 +24,7 @@ export default defineConfig(() => {
               ) {
                 return 'pdf-libs';
               }
-              if (
-                id.includes('react') ||
-                id.includes('lucide-react')
-              ) {
+              if (id.includes('react') || id.includes('lucide-react')) {
                 return 'vendor';
               }
               if (id.includes('qrcode') || id.includes('canvas')) {

@@ -464,7 +464,7 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
     numberLabel: 'رقم:',
     dateLabel: 'التاريخ:',
     amountNumLabel: 'المبلغ بالأرقام:',
-    amountWordsLabel: 'المبلغ بالحروف (التفقيط):',
+    amountWordsLabel: 'المبلغ بالحروف :',
     personReceiptLabel: 'استلمنا من السيد/ة:',
     personPaymentLabel: 'صرفنا إلى السيد/ة:',
     reasonLabel: 'وذلك عن قيمة (السبب):',
@@ -1290,7 +1290,7 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
                   <span>إدارة السندات والإيصالات المالية والخزينة</span>
                 </h3>
                 <p className="text-xs text-slate-400">
-                  تحصيل عربون الطلاب، متابعة الأقساط، وإصدار سندات قبض وصرف رسمية بالختم والتفقيط
+                  تحصيل عربون الطلاب، متابعة الأقساط، وإصدار سندات قبض وصرف رسمية بالختم 
                 </p>
               </div>
 
@@ -1331,8 +1331,8 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
               >
                 <CreditCard className="w-4 h-4 shrink-0" />
                 <span className="truncate">
-                  <span className="hidden sm:inline">كشف الطلاب والعربين</span>
-                  <span className="sm:hidden">كشف العربين</span> ({students.length})
+                  <span className="hidden sm:inline">كشف الطلاب العربون</span>
+                  <span className="sm:hidden">كشف العربون</span> ({students.length})
                 </span>
               </button>
 
@@ -2992,8 +2992,8 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                     <span>
-                      <span className="hidden sm:inline">تحديث التفقيط</span>
-                      <span className="sm:hidden">تفقيط 🔄</span>
+                      <span className="hidden sm:inline">تحديث </span>
+                      <span className="sm:hidden">تحميل 🔄</span>
                     </span>
                   </button>
 
@@ -3343,7 +3343,7 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
                   </div>
 
                   <div className="text-right text-slate-800 text-xs flex-1 bg-white px-3 py-2 rounded-lg border border-amber-200 shadow-sm">
-                    <span className="block text-slate-500 text-[10px] font-bold mb-0.5">المبلغ بالحروف (التفقيط المعتمد):</span>
+                    <span className="block text-slate-500 text-[10px] font-bold mb-0.5">المبلغ بالحروف :</span>
                     <input
                       type="text"
                       dir="rtl"
@@ -3765,7 +3765,7 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
 
               {/* Automatic Arabic Words Tafqit Preview */}
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs">
-                <span className="text-slate-400 block text-[10px]">التفقيط الآلي بالمبلغ (بالكلمات):</span>
+                <span className="text-slate-400 block text-[10px]">  المبلغ (بالكلمات):</span>
                 <span className="text-emerald-400 font-bold">{numberToArabicWords(receiptForm.amount)}</span>
               </div>
 
@@ -3902,7 +3902,7 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
 
               {/* Automatic Arabic Words Tafqit Preview */}
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs">
-                <span className="text-slate-400 block text-[10px]">التفقيط الآلي للمبلغ بالكلمات:</span>
+                <span className="text-slate-400 block text-[10px]">  المبلغ بالحروف:</span>
                 <span className="text-emerald-400 font-bold">{numberToArabicWords(studentDepositAmount)}</span>
               </div>
 

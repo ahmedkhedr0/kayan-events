@@ -1075,6 +1075,16 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                       <span>إرسال وتعديل الواتساب</span>
                     </button>
 
+                    {/* Digital Pass Modal */}
+                    <button
+                      onClick={() => onOpenTicketPassModal(student)}
+                      className="bg-slate-800 text-amber-400 p-2.5 rounded-xl border border-slate-700 active:scale-95"
+                      title="معاينة التذكرة الرقمية"
+                    >
+                      <QrCode className="w-4 h-4" />
+                    </button>
+
+                    {/* Receipt Voucher Button */}
                     <button
                       onClick={() => handleOpenWhatsAppMessenger(student, 'receipt', 'receipt_voucher')}
                       className="bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 p-2.5 rounded-xl active:scale-95 transition flex items-center gap-1.5"
@@ -1082,25 +1092,6 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                     >
                       <Receipt className="w-4 h-4 text-emerald-400" />
                       <span className="text-xs font-bold hidden sm:inline">إيصال</span>
-                    </button>
-
-                    <button
-                      onClick={() => onOpenTicketPassModal(student)}
-                      className="bg-slate-800 text-amber-400 p-2.5 rounded-xl border border-slate-700 active:scale-95"
-                      title="معاينة التذكرة"
-                    >
-                      <QrCode className="w-4 h-4" />
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        const voucher = createStudentReceiptVoucher(student, settings);
-                        exportReceiptAsHighResImage(voucher, settings);
-                      }}
-                      className="bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 p-2.5 rounded-xl border border-emerald-600/40 active:scale-95 transition"
-                      title="تحميل إيصال النقدية كصورة PNG مباشرة (مع كشف المتبقي والتفاصيل)"
-                    >
-                      <Receipt className="w-4 h-4 text-emerald-400" />
                     </button>
 
                     <button
@@ -1372,15 +1363,6 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                             <span className="hidden xl:inline text-[11px]">واتساب</span>
                           </button>
 
-                          {/* Direct Receipt Modal */}
-                          <button
-                            onClick={() => handleOpenWhatsAppMessenger(student, 'receipt', 'receipt_voucher')}
-                            className="bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 p-1.5 rounded-lg transition"
-                            title="عرض وطباعة إيصال القبض المالي"
-                          >
-                            <Receipt className="w-3.5 h-3.5" />
-                          </button>
-
                           {/* Digital Pass Modal */}
                           <button
                             onClick={() => onOpenTicketPassModal(student)}
@@ -1390,14 +1372,11 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                             <QrCode className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Download Receipt as Image (PNG) */}
+                          {/* Direct Receipt Modal */}
                           <button
-                            onClick={() => {
-                              const voucher = createStudentReceiptVoucher(student, settings);
-                              exportReceiptAsHighResImage(voucher, settings);
-                            }}
-                            className="bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 p-1.5 rounded-lg transition border border-emerald-600/40 active:scale-95"
-                            title="تحميل إيصال النقدية كصورة PNG مباشرة (مع كشف المتبقي والتفاصيل)"
+                            onClick={() => handleOpenWhatsAppMessenger(student, 'receipt', 'receipt_voucher')}
+                            className="bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 p-1.5 rounded-lg transition"
+                            title="عرض وطباعة إيصال القبض المالي"
                           >
                             <Receipt className="w-3.5 h-3.5 text-emerald-400" />
                           </button>

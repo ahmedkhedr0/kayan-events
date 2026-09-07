@@ -2703,36 +2703,8 @@ export const exportTicketElementAsPNG = async (
     (student ? document.getElementById(`kayan-digital-ticket-${student.id}-frame`) : null) ||
     (student ? document.getElementById(`kayan-digital-ticket-${student.id}`) : null);
 
-  // On Mobile or Narrow viewports, live DOM element wraps vertically into a narrow stacked column.
-  // To ensure the ticket downloads EXACTLY like on a laptop (wide, high-resolution horizontal boarding pass),
-  // we immediately route to generateStudentTicketCanvas which renders the fixed 820px luxury layout!
-  const isMobileOrNarrow =
-    typeof window !== 'undefined' &&
-    (window.innerWidth < 768 || (targetElement && targetElement.offsetWidth < 680));
-
-  if (student && settings && (isMobileOrNarrow || !targetElement)) {
-    try {
-      const fbCanvas = await generateStudentTicketCanvas(student, settings, elementId);
-      if (fbCanvas && fbCanvas.width > 0) {
-        return new Promise((resolve) => {
-          fbCanvas.toBlob((blob) => {
-            if (blob) {
-              triggerFileDownload(blob, downloadFileName);
-              resolve(true);
-            } else {
-              const image = fbCanvas.toDataURL('image/png');
-              triggerFileDownload(image, downloadFileName);
-              resolve(true);
-            }
-          }, 'image/png', 1.0);
-        });
-      }
-    } catch (canvasErr) {
-      console.warn('generateStudentTicketCanvas fallback error:', canvasErr);
-    }
-  }
-
-  if (targetElement && !isMobileOrNarrow) {
+  // 1. Direct High-Fidelity DOM Capture (Guarantees 100% exact replica of what the user sees on screen, whether on phone or laptop)
+  if (targetElement) {
     try {
       if (typeof document !== 'undefined' && document.fonts) {
         try {
@@ -2796,7 +2768,8 @@ export const exportTicketElementAsPNG = async (
         console.warn('html-to-image toCanvas error, trying html2canvas:', canvasErr);
       }
 
-      // Method 3: html2canvas with sanitized styles
+      // Method 3: html2canvas with sanitized styles matching current display dimensions
+      const targetWidth = targetElement.offsetWidth || 700;
       const canvas = await html2canvas(targetElement, {
         scale: 2.5,
         useCORS: true,
@@ -2805,16 +2778,8 @@ export const exportTicketElementAsPNG = async (
         logging: false,
         scrollX: 0,
         scrollY: 0,
-        windowWidth: 1024,
+        windowWidth: targetWidth > 768 ? targetWidth : undefined,
         onclone: (clonedDoc) => {
-          const frame = clonedDoc.getElementById(`${elementId}-frame`);
-          if (frame) {
-            frame.style.width = '750px';
-            frame.style.maxWidth = '750px';
-            frame.style.minWidth = '750px';
-            frame.style.margin = '0 auto';
-            frame.style.backgroundColor = '#060913';
-          }
           sanitizeClonedDoc(clonedDoc);
         },
       });
@@ -2879,15 +2844,7 @@ export const copyTicketElementToClipboard = async (
     (student ? document.getElementById(`kayan-digital-ticket-${student.id}-frame`) : null) ||
     (student ? document.getElementById(`kayan-digital-ticket-${student.id}`) : null);
 
-  const isMobileOrNarrow =
-    typeof window !== 'undefined' &&
-    (window.innerWidth < 768 || (targetElement && targetElement.offsetWidth < 680));
-
-  if (student && settings && (isMobileOrNarrow || !targetElement)) {
-    try {
-      canvas = await generateStudentTicketCanvas(student, settings, elementId);
-    } catch (_) {}
-  } else if (targetElement && !isMobileOrNarrow) {
+  if (targetElement) {
     try {
       if (typeof document !== 'undefined' && document.fonts) {
         try {
@@ -2920,6 +2877,7 @@ export const copyTicketElementToClipboard = async (
       }
 
       if (!canvas) {
+        const targetWidth = targetElement.offsetWidth || 700;
         canvas = await html2canvas(targetElement, {
           scale: 2.5,
           useCORS: true,
@@ -2928,16 +2886,8 @@ export const copyTicketElementToClipboard = async (
           logging: false,
           scrollX: 0,
           scrollY: 0,
-          windowWidth: 1024,
+          windowWidth: targetWidth > 768 ? targetWidth : undefined,
           onclone: (clonedDoc) => {
-            const frame = clonedDoc.getElementById(`${elementId}-frame`);
-            if (frame) {
-              frame.style.width = '750px';
-              frame.style.maxWidth = '750px';
-              frame.style.minWidth = '750px';
-              frame.style.margin = '0 auto';
-              frame.style.backgroundColor = '#060913';
-            }
             sanitizeClonedDoc(clonedDoc);
           },
         });
@@ -5186,6 +5136,4 @@ export const generateRunOfShowPDF = async (
     }
   }
 };
-
-
 
