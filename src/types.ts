@@ -273,12 +273,23 @@ export interface ReceiptVoucher {
   voucherNumber: string; // e.g. RC-2026-001 or PV-2026-001
   type: 'receipt' | 'payment'; // استلام من طالب أو صرف لمورد
   personName: string;
+  personPhone?: string;
   amount: number;
   amountInWords?: string;
   reason: string;
   paymentMethod: PaymentMethod;
   date: string;
   supervisorName: string;
+
+  // تفاصيل الحركة المالية المتقدمة (العربون والسداد والمركز المالي)
+  totalAmount?: number; // المبلغ الإجمالي الكلي للخدمة / التذكرة
+  previousPaid?: number; // المدفوع سابقاً (العربون السابق)
+  previousRemaining?: number; // الباقي السابق قبل هذه الدفعة
+  paidNow?: number; // الدفعة المسددة حالياً بهذا الإيصال
+  totalPaidSoFar?: number; // إجمالي المدفوع حتى الآن (سابق + حالي)
+  currentRemaining?: number; // المتبقي الحالي بعد هذا الإيصال
+  isDeposit?: boolean; // هل الإيصال عربون / دفعة جزئية أولى
+  isFullyPaid?: boolean; // هل تم تسديد كامل المبلغ وخالص السداد بالكامل
 }
 
 export type LogisticsCategory =
@@ -364,7 +375,9 @@ export interface TripSettings {
   whatsappGroupLink: string;
   supportPhone: string;
   assemblyTime?: string;
+  gatheringTime?: string; // ميعاد التجمع الدقيق
   assemblyLocation?: string;
+  gatheringPoint?: string; // نقطة ومكان التجمع الدقيق
   companyPhone?: string;
   companyNameAr?: string;
   companyNameEn?: string;

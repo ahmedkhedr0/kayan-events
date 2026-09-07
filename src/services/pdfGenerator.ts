@@ -3,6 +3,7 @@ import html2canvas from 'html2canvas-pro';
 import { toCanvas as htmlToImageToCanvas, toBlob as htmlToImageToBlob, toPng as htmlToImageToPng } from 'html-to-image';
 import QRCode from 'qrcode';
 import { ContractData, ReceiptVoucher, Student, TripSettings, TreasuryTransfer, CompanyTreasury, TimelineEvent, DriverInfo, getStudentMealInfo, getCompanionMealInfo } from '../types';
+import { numberToArabicWords } from '../utils/arabicTafqit';
 import { formatTripDateSafely } from '../utils/dateFormatter';
 import { KAYAN_LOGO_BASE64, KAYAN_BADGE_BASE64, KAYAN_EVENTS_LOGO_BASE64 } from '../assets/images/embeddedImages';
 
@@ -217,49 +218,16 @@ export const triggerFileDownload = (blobOrDataUrl: Blob | string, filename: stri
   try {
     const isBlob = blobOrDataUrl instanceof Blob;
     const url = isBlob ? URL.createObjectURL(blobOrDataUrl) : blobOrDataUrl;
-    const isMobile = typeof window !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     
-    // On Mobile: Use Web Share API if supported to allow direct saving to Phone Gallery / Photos
-    let didShare = false;
-    if (isMobile && typeof navigator !== 'undefined' && navigator.share && navigator.canShare && isBlob) {
-      try {
-        const mimeType = filename.endsWith('.pdf')
-          ? 'application/pdf'
-          : filename.endsWith('.png')
-          ? 'image/png'
-          : filename.endsWith('.csv')
-          ? 'text/csv'
-          : (blobOrDataUrl as Blob).type || 'image/png';
-
-        const file = new File([blobOrDataUrl], filename, { type: mimeType });
-        if (navigator.canShare({ files: [file] })) {
-          navigator.share({
-            title: filename,
-            text: `تنزيل ملف: ${filename}`,
-            files: [file],
-          }).catch((shareErr) => {
-            // If user dismissed or aborted, trigger direct anchor download safely
-            if (shareErr && shareErr.name !== 'AbortError') {
-              triggerDirectAnchorDownload(url, filename);
-            }
-          });
-          didShare = true;
-        }
-      } catch (shareErr) {
-        console.log('Mobile share prompt error, falling back to direct anchor:', shareErr);
-      }
-    }
-
-    // On Desktop / Laptop (or mobile fallback): Trigger direct anchor download
-    if (!didShare) {
-      triggerDirectAnchorDownload(url, filename);
-    }
+    // Always trigger direct anchor download to ensure files (PNG images, PDFs) download
+    // straight to the user's phone/laptop storage without intercepting with Google Drive / Google Docs links
+    triggerDirectAnchorDownload(url, filename);
     
     setTimeout(() => {
       if (isBlob) {
         URL.revokeObjectURL(url);
       }
-    }, 25000);
+    }, 30000);
   } catch (err) {
     console.error('Error in triggerFileDownload:', err);
   }
@@ -724,6 +692,51 @@ export const exportContractAsHighResImage = async (
 };
 
 /**
+ * Constructs a fully enriched official ReceiptVoucher for any student
+ * Ensures all financial details, remaining amount, and detailed reason match official standards
+ */
+export const createStudentReceiptVoucher = (
+  student: Student,
+  settings: TripSettings,
+  existingReceipt?: Partial<ReceiptVoucher> | null
+): ReceiptVoucher => {
+  const isFull = (student.remainingAmount ?? 0) <= 0 || (student.totalAmount - student.paidAmount <= 0);
+  const remainingFormatted = (student.remainingAmount || 0).toLocaleString();
+  const tripName = settings.tripName || 'فعاليات كيان';
+
+  const defaultReason = isFull
+    ? `سداد قيمة تذكرة رحلة (${tripName}) بالكامل - كود: ${student.ticketCode} - أتوبيس ${student.busNumber || '-'} مقعد #${student.seatNumber || '-'}`
+    : `سداد عربون / دفعة حجز تذكرة رحلة (${tripName}) - كود: ${student.ticketCode} - المتبقي: ${remainingFormatted} ج.م`;
+
+  return {
+    id: existingReceipt?.id || `rc-${student.id}`,
+    voucherNumber: existingReceipt?.voucherNumber || `RC-${student.ticketCode}`,
+    type: 'receipt',
+    personName: student.name,
+    personPhone: student.phone,
+    amount: student.paidAmount,
+    amountInWords: numberToArabicWords(student.paidAmount),
+    reason:
+      existingReceipt?.reason &&
+      !existingReceipt.reason.startsWith('حجز تذكرة ') &&
+      existingReceipt.reason.length > 10
+        ? existingReceipt.reason
+        : defaultReason,
+    paymentMethod: student.paymentMethod || existingReceipt?.paymentMethod || 'cash',
+    date: existingReceipt?.date || new Date().toISOString().slice(0, 10),
+    supervisorName: existingReceipt?.supervisorName || 'إدارة الحجوزات والمالية',
+    totalAmount: student.totalAmount,
+    previousPaid: existingReceipt?.previousPaid ?? 0,
+    previousRemaining: existingReceipt?.previousRemaining ?? student.totalAmount,
+    paidNow: existingReceipt?.paidNow ?? student.paidAmount,
+    totalPaidSoFar: existingReceipt?.totalPaidSoFar ?? student.paidAmount,
+    currentRemaining: student.remainingAmount,
+    isDeposit: !isFull,
+    isFullyPaid: isFull,
+  };
+};
+
+/**
  * Generate Receipt or Payment Voucher Canvas (Captures on-screen DOM element or creates official luxury standalone voucher)
  */
 export const generateReceiptCanvas = async (
@@ -740,7 +753,13 @@ export const generateReceiptCanvas = async (
   }
 
   // If on-screen element exists, capture it directly with high-fidelity clone
-  if (targetElement) {
+  // BUT on mobile or if targetElement is scaled down, bypass live DOM and use the dedicated
+  // 780px official template to guarantee 100% parity with laptop quality!
+  const isMobileOrNarrow =
+    typeof window !== 'undefined' &&
+    (window.innerWidth < 768 || (targetElement && targetElement.offsetWidth < 650));
+
+  if (targetElement && !isMobileOrNarrow) {
     try {
       const canvas = await html2canvas(targetElement, {
         scale: 3,
@@ -780,6 +799,8 @@ export const generateReceiptCanvas = async (
   container.style.left = '-9999px';
   container.style.top = '0';
   container.style.width = '780px';
+  container.style.minWidth = '780px';
+  container.style.maxWidth = '780px';
   container.style.background = '#ffffff';
   container.style.color = '#0f172a';
   container.style.direction = 'rtl';
@@ -804,6 +825,16 @@ export const generateReceiptCanvas = async (
   const currentRemaining = voucher.currentRemaining ?? Math.max(0, totalAmount - totalPaidSoFar);
   const isSettled = voucher.isFullyPaid ?? (currentRemaining <= 0);
   const showFinancialBreakdown = (voucher.totalAmount !== undefined && voucher.totalAmount > 0) || voucher.previousPaid !== undefined || voucher.isDeposit || isSettled || previousPaid > 0 || currentRemaining > 0;
+
+  // Enhance reason if it was a legacy/short reason missing remaining amount and financial breakdown details
+  let displayReason = voucher.reason || (isReceipt ? 'عربون / دفعة حجز رحلة' : 'مصروفات رحلة معتمدة');
+  if (displayReason.startsWith('حجز تذكرة ') && !displayReason.includes('المتبقي')) {
+    if (currentRemaining > 0) {
+      displayReason = `سداد عربون / دفعة حجز تذكرة رحلة (${settings.tripName || 'فعاليات كيان'}) - المتبقي: ${currentRemaining.toLocaleString()} ج.م`;
+    } else {
+      displayReason = `سداد قيمة تذكرة رحلة (${settings.tripName || 'فعاليات كيان'}) بالكامل - خالص السداد ✓`;
+    }
+  }
 
   container.innerHTML = `
     <div style="border: 6px double ${themeBorder}; padding: 24px; border-radius: 20px; background: #ffffff; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.08); font-family: 'Tajawal', sans-serif;">
@@ -881,7 +912,7 @@ export const generateReceiptCanvas = async (
         <div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px dashed #cbd5e1;">
           <span style="color: #475569; font-weight: 700; font-size: 13px;">وذلك عن قيمة (السبب):</span>
           <strong style="color: #0f172a; font-size: 14px; font-weight: 800;">
-            ${voucher.reason || 'عربون/دفعة حجز رحلة'}
+            ${displayReason}
           </strong>
         </div>
 
@@ -1067,7 +1098,8 @@ export const exportReceiptAsHighResImage = async (
   settings: TripSettings,
   elementOrId?: HTMLElement | string | null
 ): Promise<{ success: boolean; filename: string; dataUrl?: string }> => {
-  const filename = `KAYAN_Voucher_${voucher.voucherNumber}_${voucher.personName}.png`;
+  const sanitizedPerson = (voucher.personName || 'عميل').replace(/[^\w\u0600-\u06FF]/g, '_');
+  const filename = `KAYAN_Voucher_${voucher.voucherNumber || 'RC-001'}_${sanitizedPerson}.png`;
 
   try {
     const canvas = await generateReceiptCanvas(voucher, settings, elementOrId);
@@ -1078,21 +1110,7 @@ export const exportReceiptAsHighResImage = async (
     return new Promise((resolve) => {
       canvas.toBlob((blob) => {
         if (blob) {
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = filename;
-          link.style.display = 'none';
-          document.body.appendChild(link);
-          link.click();
-
-          setTimeout(() => {
-            if (document.body.contains(link)) {
-              document.body.removeChild(link);
-            }
-            URL.revokeObjectURL(url);
-          }, 3000);
-
+          triggerFileDownload(blob, filename);
           resolve({
             success: true,
             filename,
@@ -1100,12 +1118,7 @@ export const exportReceiptAsHighResImage = async (
           });
         } else {
           const dataUrl = canvas.toDataURL('image/png');
-          const link = document.createElement('a');
-          link.href = dataUrl;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
+          triggerFileDownload(dataUrl, filename);
           resolve({ success: true, filename, dataUrl });
         }
       }, 'image/png', 1.0);
@@ -1758,7 +1771,10 @@ export const generateStudentTicketCanvas = async (
   settings: TripSettings,
   elementId?: string
 ): Promise<HTMLCanvasElement | null> => {
-  // 1. Direct On-Screen DOM Element Capture (Guarantees 100% exact replica of what the user sees)
+  // 1. Direct On-Screen DOM Element Capture (Used on Desktop/Laptop when width >= 680px)
+  // On mobile (< 768px or offsetWidth < 680px), the on-screen card flex-wraps vertically into a long, tall column.
+  // We strictly bypass live DOM on mobile and use the dedicated 820px horizontal landscape boarding pass
+  // so the downloaded ticket is wide, horizontal, high-resolution, and matches the laptop view 100%!
   const targetDomElem =
     (elementId
       ? document.getElementById(`${elementId}-frame`) || document.getElementById(elementId)
@@ -1766,7 +1782,11 @@ export const generateStudentTicketCanvas = async (
     document.getElementById(`kayan-digital-ticket-${student.id}-frame`) ||
     document.getElementById(`kayan-digital-ticket-${student.id}`);
 
-  if (targetDomElem) {
+  const isMobileOrNarrow =
+    typeof window !== 'undefined' &&
+    (window.innerWidth < 768 || (targetDomElem && targetDomElem.offsetWidth < 680));
+
+  if (targetDomElem && !isMobileOrNarrow) {
     try {
       if (typeof document !== 'undefined' && document.fonts) {
         try {
@@ -1835,12 +1855,14 @@ export const generateStudentTicketCanvas = async (
     }
   }
 
-  // 2. Offscreen Dedicated Container (used when element is not mounted in DOM)
+  // 2. Offscreen Dedicated Container (Guarantees identical 820px desktop landscape boarding pass on ALL devices)
   const container = document.createElement('div');
   container.style.position = 'fixed';
   container.style.left = '-9999px';
   container.style.top = '0';
-  container.style.width = '720px';
+  container.style.width = '820px';
+  container.style.minWidth = '820px';
+  container.style.maxWidth = '820px';
   container.style.background = '#020617';
   container.style.color = '#f8fafc';
   container.style.direction = 'rtl';
@@ -2681,7 +2703,36 @@ export const exportTicketElementAsPNG = async (
     (student ? document.getElementById(`kayan-digital-ticket-${student.id}-frame`) : null) ||
     (student ? document.getElementById(`kayan-digital-ticket-${student.id}`) : null);
 
-  if (targetElement) {
+  // On Mobile or Narrow viewports, live DOM element wraps vertically into a narrow stacked column.
+  // To ensure the ticket downloads EXACTLY like on a laptop (wide, high-resolution horizontal boarding pass),
+  // we immediately route to generateStudentTicketCanvas which renders the fixed 820px luxury layout!
+  const isMobileOrNarrow =
+    typeof window !== 'undefined' &&
+    (window.innerWidth < 768 || (targetElement && targetElement.offsetWidth < 680));
+
+  if (student && settings && (isMobileOrNarrow || !targetElement)) {
+    try {
+      const fbCanvas = await generateStudentTicketCanvas(student, settings, elementId);
+      if (fbCanvas && fbCanvas.width > 0) {
+        return new Promise((resolve) => {
+          fbCanvas.toBlob((blob) => {
+            if (blob) {
+              triggerFileDownload(blob, downloadFileName);
+              resolve(true);
+            } else {
+              const image = fbCanvas.toDataURL('image/png');
+              triggerFileDownload(image, downloadFileName);
+              resolve(true);
+            }
+          }, 'image/png', 1.0);
+        });
+      }
+    } catch (canvasErr) {
+      console.warn('generateStudentTicketCanvas fallback error:', canvasErr);
+    }
+  }
+
+  if (targetElement && !isMobileOrNarrow) {
     try {
       if (typeof document !== 'undefined' && document.fonts) {
         try {
@@ -2828,7 +2879,15 @@ export const copyTicketElementToClipboard = async (
     (student ? document.getElementById(`kayan-digital-ticket-${student.id}-frame`) : null) ||
     (student ? document.getElementById(`kayan-digital-ticket-${student.id}`) : null);
 
-  if (targetElement) {
+  const isMobileOrNarrow =
+    typeof window !== 'undefined' &&
+    (window.innerWidth < 768 || (targetElement && targetElement.offsetWidth < 680));
+
+  if (student && settings && (isMobileOrNarrow || !targetElement)) {
+    try {
+      canvas = await generateStudentTicketCanvas(student, settings, elementId);
+    } catch (_) {}
+  } else if (targetElement && !isMobileOrNarrow) {
     try {
       if (typeof document !== 'undefined' && document.fonts) {
         try {
@@ -5127,8 +5186,6 @@ export const generateRunOfShowPDF = async (
     }
   }
 };
-
-
 
 
 

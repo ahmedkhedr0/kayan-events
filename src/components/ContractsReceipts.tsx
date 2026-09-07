@@ -68,7 +68,7 @@ import {
 import { CompanySeal } from './CompanySeal';
 import { DigitalSignaturePad } from './DigitalSignaturePad';
 import { LEGAL_CLAUSE_LIBRARY, LegalClauseTemplate } from '../data/legalClauseLibrary';
-import kayanBadge from '../assets/images/kayan_badge_1785354902221.jpg';
+import { KAYAN_BADGE_BASE64 } from '../assets/images/embeddedImages';
 
 interface ContractsReceiptsProps {
   contracts: ContractData[];
@@ -667,9 +667,12 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
     }
 
     const receiptNum = `RC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const isFullSettlement = newRemaining <= 0;
     const reasonText = studentDepositNotes.trim()
-      ? `${studentDepositNotes.trim()} - كود الطالب: ${selectedStudentForDeposit.ticketCode} - المتبقي بعد السداد: ${newRemaining} ج.م`
-      : `دفعة/عربون حجز رحلة (${settings.tripName}) - كود: ${selectedStudentForDeposit.ticketCode} - المتبقي: ${newRemaining} ج.م`;
+      ? studentDepositNotes.trim()
+      : isFullSettlement
+      ? `سداد تكميلي (تصفية حساب وخالص السداد بالكامل) - كود الطالب: ${selectedStudentForDeposit.ticketCode}`
+      : `دفعة عربون حجز رحلة (${settings.tripName}) - كود: ${selectedStudentForDeposit.ticketCode} - المتبقي: ${newRemaining} ج.م`;
 
     const newReceipt: ReceiptVoucher = {
       id: `rcpt-${Date.now()}`,
@@ -682,6 +685,16 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
       paymentMethod: studentDepositMethod,
       date: new Date().toISOString().slice(0, 10),
       supervisorName: studentDepositSupervisor || 'مسؤول المالية',
+      
+      // Detailed Financial Settlement breakdown
+      totalAmount: selectedStudentForDeposit.totalAmount,
+      previousPaid: currentPaid,
+      previousRemaining: Math.max(0, selectedStudentForDeposit.totalAmount - currentPaid),
+      paidNow: studentDepositAmount,
+      totalPaidSoFar: newTotalPaid,
+      currentRemaining: newRemaining,
+      isDeposit: currentPaid === 0,
+      isFullyPaid: isFullSettlement,
     };
 
     onAddReceipt(newReceipt);
@@ -1644,6 +1657,14 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
                                 <span>المعاينة</span>
                               </button>
                               <button
+                                onClick={() => exportReceiptAsHighResImage(voucher, settings)}
+                                className="bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1 min-h-[36px] active:scale-95"
+                                title="تنزيل الإيصال كصورة PNG مباشرة"
+                              >
+                                <ImageIcon className="w-3.5 h-3.5" />
+                                <span>صورة</span>
+                              </button>
+                              <button
                                 onClick={() => generateReceiptPDF(voucher, settings)}
                                 className="bg-indigo-600 text-white font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1 min-h-[36px] active:scale-95"
                               >
@@ -1751,6 +1772,13 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
                                     >
                                       <Eye className="w-3.5 h-3.5" />
                                       <span>اطلاع ورقي 👁️</span>
+                                    </button>
+                                    <button
+                                      onClick={() => exportReceiptAsHighResImage(voucher, settings)}
+                                      className="bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600 hover:text-white p-1.5 rounded-lg transition border border-emerald-500/30"
+                                      title="تنزيل الإيصال كصورة PNG مباشرة"
+                                    >
+                                      <ImageIcon className="w-4 h-4" />
                                     </button>
                                     <button
                                       onClick={() => generateReceiptPDF(voucher, settings)}
@@ -2220,7 +2248,7 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
                 <div className="border-b-2 border-indigo-950 pb-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <div className="flex items-center gap-3.5 flex-1 w-full sm:w-auto">
                     <img
-                      src={kayanBadge}
+                      src={KAYAN_BADGE_BASE64}
                       alt="KAYAN Badge"
                       className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl border-2 border-amber-500 object-cover shadow-sm shrink-0"
                     />
@@ -3376,6 +3404,75 @@ export const ContractsReceipts: React.FC<ContractsReceiptsProps> = ({
                     </strong>
                   </div>
                 </div>
+
+                {/* Financial Breakdown & Settlement Status Card in Receipt Modal */}
+                {(() => {
+                  const tot = viewingReceipt.totalAmount ?? viewingReceipt.amount;
+                  const paidNow = viewingReceipt.paidNow ?? viewingReceipt.amount;
+                  const prevPaid = viewingReceipt.previousPaid ?? 0;
+                  const prevRem = viewingReceipt.previousRemaining ?? Math.max(0, tot - prevPaid);
+                  const totalPaid = viewingReceipt.totalPaidSoFar ?? (prevPaid + paidNow);
+                  const currRem = viewingReceipt.currentRemaining ?? Math.max(0, tot - totalPaid);
+                  const isSettled = viewingReceipt.isFullyPaid ?? (currRem <= 0);
+
+                  return (
+                    <div className={`p-3 sm:p-4 rounded-xl border-2 space-y-3 print:border-green-600 ${
+                      isSettled ? 'bg-emerald-50/90 border-emerald-300' : 'bg-amber-50/90 border-amber-300'
+                    }`}>
+                      <div className="flex items-center justify-between border-b pb-2 gap-2 border-slate-300/80">
+                        <span className={`font-black text-xs sm:text-sm flex items-center gap-1.5 ${
+                          isSettled ? 'text-emerald-900' : 'text-amber-900'
+                        }`}>
+                          <span>📊 كشف تسوية وموقف السداد</span>
+                        </span>
+                        {isSettled ? (
+                          <span className="bg-emerald-600 text-white font-black text-[11px] px-2.5 py-0.5 rounded-full shadow-sm flex items-center gap-1">
+                            ✓ خالص السداد بالكامل
+                          </span>
+                        ) : (
+                          <span className="bg-amber-500 text-white font-black text-[11px] px-2.5 py-0.5 rounded-full shadow-sm">
+                            ⏳ عربون / سداد جزئي
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                        <div className="bg-white p-2 rounded-lg border border-slate-200 shadow-2xs">
+                          <span className="text-[10px] text-slate-500 font-bold block mb-0.5">المبلغ الكلي</span>
+                          <strong className="text-slate-900 font-black font-mono text-sm">{tot} ج.م</strong>
+                        </div>
+
+                        {prevPaid > 0 && (
+                          <div className="bg-white p-2 rounded-lg border border-amber-200 shadow-2xs">
+                            <span className="text-[10px] text-amber-700 font-bold block mb-0.5">المدفوع سابقاً (عربون)</span>
+                            <strong className="text-amber-800 font-black font-mono text-sm">{prevPaid} ج.م</strong>
+                            <span className="text-[9px] text-amber-600 block font-bold">وكان باقي: {prevRem} ج.م</span>
+                          </div>
+                        )}
+
+                        <div className="bg-white p-2 rounded-lg border-2 border-emerald-500 shadow-2xs">
+                          <span className="text-[10px] text-emerald-700 font-black block mb-0.5">المدفوع حالياً</span>
+                          <strong className="text-emerald-700 font-black font-mono text-base">{paidNow} ج.م</strong>
+                        </div>
+
+                        <div className={`p-2 rounded-lg border shadow-2xs ${
+                          currRem > 0 ? 'bg-rose-50 border-rose-200' : 'bg-emerald-100 border-emerald-300'
+                        }`}>
+                          <span className={`text-[10px] font-bold block mb-0.5 ${
+                            currRem > 0 ? 'text-rose-700' : 'text-emerald-800'
+                          }`}>
+                            {currRem > 0 ? 'المتبقي للسداد' : 'إجمالي السداد'}
+                          </span>
+                          <strong className={`font-black font-mono text-sm ${
+                            currRem > 0 ? 'text-rose-700' : 'text-emerald-800'
+                          }`}>
+                            {currRem > 0 ? `${currRem} ج.م` : `${totalPaid} ج.م (خالص ✓)`}
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Official Signatures & Stamp */}
                 <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 text-center font-bold text-xs">

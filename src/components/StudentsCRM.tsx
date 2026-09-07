@@ -33,16 +33,21 @@ import {
   ArrowUpDown,
   FileSpreadsheet,
   Lock,
+  Receipt,
+  Image as ImageIcon,
+  CreditCard,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Student, PaymentStatus, PaymentMethod, TShirtSize, Gender, ParticipantRole, PARTICIPANT_ROLES_CONFIG, TripSettings, TripAddon, getStudentMealInfo, isApparelAddon, isMealAddon, ActiveUserSession } from '../types';
+import { Student, PaymentStatus, PaymentMethod, TShirtSize, Gender, ParticipantRole, PARTICIPANT_ROLES_CONFIG, TripSettings, TripAddon, getStudentMealInfo, isApparelAddon, isMealAddon, ActiveUserSession, ReceiptVoucher } from '../types';
 import { sendWhatsAppReceipt, sendCustomWhatsAppMessage, generateWhatsAppTicketText } from '../services/storage';
-import { generateStudentTicketPDF, generateReceiptPDF, exportTicketElementAsPNG, copyTicketElementToClipboard } from '../services/pdfGenerator';
+import { generateStudentTicketPDF, generateReceiptPDF, exportReceiptAsHighResImage, createStudentReceiptVoucher } from '../services/pdfGenerator';
 import { DigitalTicketCard } from './DigitalTicketCard';
 import { BusSeatPicker } from './BusSeatPicker';
+import { numberToArabicWords } from './ContractsReceipts';
 
 interface StudentsCRMProps {
   students: Student[];
+  receipts?: ReceiptVoucher[];
   settings: TripSettings;
   userSession?: ActiveUserSession;
   onAddStudent: (newStudent: Omit<Student, 'id' | 'ticketCode'>) => Student;
@@ -54,10 +59,12 @@ interface StudentsCRMProps {
   onToggleCheckInDeparture?: (studentId: string) => void;
   onToggleCheckInReturn?: (studentId: string) => void;
   onNavigateTab?: (tab: string) => void;
+  onAddReceipt?: (receipt: ReceiptVoucher) => void;
 }
 
 export const StudentsCRM: React.FC<StudentsCRMProps> = ({
   students,
+  receipts = [],
   settings,
   userSession,
   onAddStudent,
@@ -69,6 +76,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
   onToggleCheckInDeparture,
   onToggleCheckInReturn,
   onNavigateTab,
+  onAddReceipt,
 }) => {
   // Bus restriction for field supervisor or specific assigned bus
   const restrictedBus = Boolean(
@@ -106,7 +114,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
   const [whatsAppPhone, setWhatsAppPhone] = useState('');
   const [whatsAppMessageText, setWhatsAppMessageText] = useState('');
   const [whatsAppTemplate, setWhatsAppTemplate] = useState<'full_ticket' | 'receipt' | 'bus_info'>('full_ticket');
-  const [whatsAppTab, setWhatsAppTab] = useState<'visual_ticket' | 'text_message'>('visual_ticket');
+  const [whatsAppTab, setWhatsAppTab] = useState<'visual_ticket' | 'receipt_voucher' | 'text_message'>('visual_ticket');
   const [autoSendWhatsAppOnSave, setAutoSendWhatsAppOnSave] = useState(true);
   const [copiedState, setCopiedState] = useState(false);
 
@@ -169,15 +177,42 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
   // Open WhatsApp Ticket Customizer Modal
   const handleOpenWhatsAppMessenger = (
     student: Student,
-    templateType: 'full_ticket' | 'receipt' | 'bus_info' = 'full_ticket'
+    templateType: 'full_ticket' | 'receipt' | 'bus_info' = 'full_ticket',
+    initialTab: 'visual_ticket' | 'receipt_voucher' | 'text_message' = 'visual_ticket'
   ) => {
     setWhatsAppStudent(student);
     setWhatsAppPhone(student.phone);
     setWhatsAppTemplate(templateType);
-    setWhatsAppTab('visual_ticket');
+    setWhatsAppTab(initialTab);
     setWhatsAppMessageText(generateWhatsAppTicketText(student, settings, templateType));
     setIsWhatsAppMessengerOpen(true);
   };
+
+  // Compute active voucher for the selected student
+  const activeStudentVoucher: ReceiptVoucher = useMemo(() => {
+    if (!whatsAppStudent) {
+      return {
+        id: '',
+        voucherNumber: '',
+        type: 'receipt',
+        personName: '',
+        amount: 0,
+        reason: '',
+        paymentMethod: 'cash',
+        date: new Date().toISOString().slice(0, 10),
+        supervisorName: 'إدارة الحجوزات والمالية',
+      };
+    }
+
+    const found = receipts?.find(
+      (r) =>
+        r.personName === whatsAppStudent.name ||
+        r.voucherNumber.includes(whatsAppStudent.ticketCode) ||
+        (r.reason && r.reason.includes(whatsAppStudent.ticketCode))
+    );
+
+    return createStudentReceiptVoucher(whatsAppStudent, settings, found);
+  }, [whatsAppStudent, receipts, settings]);
 
   // Calculate student total amount based on base price, isFree, tshirt, meal, and selected addons
   const calculateStudentPrice = (
@@ -1041,6 +1076,15 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                     </button>
 
                     <button
+                      onClick={() => handleOpenWhatsAppMessenger(student, 'receipt', 'receipt_voucher')}
+                      className="bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 p-2.5 rounded-xl active:scale-95 transition flex items-center gap-1.5"
+                      title="عرض وطباعة إيصال القبض المالي المعتمد"
+                    >
+                      <Receipt className="w-4 h-4 text-emerald-400" />
+                      <span className="text-xs font-bold hidden sm:inline">إيصال</span>
+                    </button>
+
+                    <button
                       onClick={() => onOpenTicketPassModal(student)}
                       className="bg-slate-800 text-amber-400 p-2.5 rounded-xl border border-slate-700 active:scale-95"
                       title="معاينة التذكرة"
@@ -1049,26 +1093,14 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                     </button>
 
                     <button
-                      onClick={() =>
-                        generateReceiptPDF(
-                          {
-                            id: `rc-${student.id}`,
-                            voucherNumber: `RC-${student.ticketCode}`,
-                            type: 'receipt',
-                            personName: student.name,
-                            amount: student.paidAmount,
-                            reason: `حجز تذكرة ${settings.tripName} - أتوبيس ${student.busNumber}`,
-                            paymentMethod: student.paymentMethod,
-                            date: new Date().toISOString().slice(0, 10),
-                            supervisorName: 'إدارة كيان',
-                          },
-                          settings
-                        )
-                      }
-                      className="bg-slate-800 text-indigo-300 p-2.5 rounded-xl border border-slate-700 active:scale-95"
-                      title="طباعة إيصال PDF"
+                      onClick={() => {
+                        const voucher = createStudentReceiptVoucher(student, settings);
+                        exportReceiptAsHighResImage(voucher, settings);
+                      }}
+                      className="bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 p-2.5 rounded-xl border border-emerald-600/40 active:scale-95 transition"
+                      title="تحميل إيصال النقدية كصورة PNG مباشرة (مع كشف المتبقي والتفاصيل)"
                     >
-                      <Printer className="w-4 h-4" />
+                      <Receipt className="w-4 h-4 text-emerald-400" />
                     </button>
 
                     <button
@@ -1340,6 +1372,15 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                             <span className="hidden xl:inline text-[11px]">واتساب</span>
                           </button>
 
+                          {/* Direct Receipt Modal */}
+                          <button
+                            onClick={() => handleOpenWhatsAppMessenger(student, 'receipt', 'receipt_voucher')}
+                            className="bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 p-1.5 rounded-lg transition"
+                            title="عرض وطباعة إيصال القبض المالي"
+                          >
+                            <Receipt className="w-3.5 h-3.5" />
+                          </button>
+
                           {/* Digital Pass Modal */}
                           <button
                             onClick={() => onOpenTicketPassModal(student)}
@@ -1349,28 +1390,16 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                             <QrCode className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Print PDF Receipt */}
+                          {/* Download Receipt as Image (PNG) */}
                           <button
-                            onClick={() =>
-                              generateReceiptPDF(
-                                {
-                                  id: `rc-${student.id}`,
-                                  voucherNumber: `RC-${student.ticketCode}`,
-                                  type: 'receipt',
-                                  personName: student.name,
-                                  amount: student.paidAmount,
-                                  reason: `حجز تذكرة ${settings.tripName} - أتوبيس ${student.busNumber}`,
-                                  paymentMethod: student.paymentMethod,
-                                  date: new Date().toISOString().slice(0, 10),
-                                  supervisorName: 'إدارة كيان',
-                                },
-                                settings
-                              )
-                            }
-                            className="bg-slate-800 hover:bg-slate-700 text-indigo-300 p-1.5 rounded-lg transition border border-slate-700"
-                            title="تنزيل إيصال PDF"
+                            onClick={() => {
+                              const voucher = createStudentReceiptVoucher(student, settings);
+                              exportReceiptAsHighResImage(voucher, settings);
+                            }}
+                            className="bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 p-1.5 rounded-lg transition border border-emerald-600/40 active:scale-95"
+                            title="تحميل إيصال النقدية كصورة PNG مباشرة (مع كشف المتبقي والتفاصيل)"
                           >
-                            <Printer className="w-3.5 h-3.5" />
+                            <Receipt className="w-3.5 h-3.5 text-emerald-400" />
                           </button>
 
                           {/* Edit */}
@@ -2318,26 +2347,39 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
             </div>
 
             {/* View Tab Switching Bar */}
-            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-bold">
+            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-bold gap-1 overflow-x-auto no-scrollbar">
               <button
                 type="button"
                 onClick={() => setWhatsAppTab('visual_ticket')}
-                className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5 ${
+                className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5 whitespace-nowrap ${
                   whatsAppTab === 'visual_ticket'
                     ? 'bg-amber-500 text-slate-950 shadow-md font-extrabold'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
                 <QrCode className="w-4 h-4" />
-                <span>🎫 كارد التذكرة المرئي والرسمي (Visual Ticket Pass)</span>
+                <span>🎫 التذكرة الرقمية الرسمية (Ticket)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setWhatsAppTab('receipt_voucher')}
+                className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                  whatsAppTab === 'receipt_voucher'
+                    ? 'bg-emerald-600 text-white shadow-md font-extrabold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Receipt className="w-4 h-4" />
+                <span>🧾 إيصال القبض المالي المعتمد (Receipt)</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setWhatsAppTab('text_message')}
-                className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5 ${
+                className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5 whitespace-nowrap ${
                   whatsAppTab === 'text_message'
-                    ? 'bg-emerald-600 text-white shadow-md font-extrabold'
+                    ? 'bg-indigo-600 text-white shadow-md font-extrabold'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -2352,10 +2394,176 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                 student={whatsAppStudent}
                 settings={settings}
                 onClose={() => setIsWhatsAppMessengerOpen(false)}
+                onOpenReceipt={() => setWhatsAppTab('receipt_voucher')}
               />
             )}
 
-            {/* TAB 2: TEXT MESSAGE CUSTOMIZER */}
+            {/* TAB 2: FINANCIAL RECEIPT VOUCHER CARD */}
+            {whatsAppTab === 'receipt_voucher' && whatsAppStudent && (
+              <div className="space-y-4 animate-in fade-in duration-200">
+                {/* Official Receipt Container */}
+                <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950/40 border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl relative overflow-hidden">
+                  {/* Watermark Logo/Text in Background */}
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none opacity-5 select-none text-7xl font-black text-white whitespace-nowrap transform -rotate-12">
+                    KAYAN EVENTS
+                  </div>
+
+                  {/* Header Row */}
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-emerald-500/30 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-slate-950 font-black text-lg shadow-lg">
+                        <Receipt className="w-6 h-6 text-white" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-white font-black text-base sm:text-lg">
+                            سند قبض مالي إلكتروني معتمد
+                          </h3>
+                          <span className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                            OFFICIAL RECEIPT
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {settings.companyName || 'شركة كيان لتنظيم الفعاليات والرحلات'} • {settings.tripName}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="text-left sm:text-right bg-slate-900/90 border border-slate-800 px-3 py-1.5 rounded-xl font-mono text-xs">
+                      <div className="text-emerald-400 font-bold">
+                        رقم السند: {activeStudentVoucher.voucherNumber || `RC-${whatsAppStudent.ticketCode}`}
+                      </div>
+                      <div className="text-slate-400 text-[11px]">
+                        التاريخ: {activeStudentVoucher.date || new Date().toISOString().slice(0, 10)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Student & Payment Summary Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 my-4">
+                    {/* Participant Details */}
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3.5 space-y-2">
+                      <div className="text-[11px] font-bold text-slate-400 border-b border-slate-800 pb-1 flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5 text-emerald-400" />
+                        بيانات المشترك والتسكين:
+                      </div>
+                      <div className="text-sm font-black text-white flex justify-between">
+                        <span>اسم المشترك:</span>
+                        <span className="text-amber-300">{whatsAppStudent.name}</span>
+                      </div>
+                      <div className="text-xs text-slate-300 flex justify-between">
+                        <span>رقم الهاتف:</span>
+                        <span className="font-mono">{whatsAppStudent.phone}</span>
+                      </div>
+                      <div className="text-xs text-slate-300 flex justify-between">
+                        <span>كود التذكرة:</span>
+                        <span className="font-mono text-emerald-400 font-bold">{whatsAppStudent.ticketCode}</span>
+                      </div>
+                      <div className="text-xs text-slate-300 flex justify-between">
+                        <span>الأتوبيس والمقعد:</span>
+                        <span className="font-bold text-white">
+                          باص #{whatsAppStudent.busNumber} • مقعد #{whatsAppStudent.seatNumber || 'غير محدد'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Financial Summary */}
+                    <div className="bg-emerald-950/40 border border-emerald-600/30 rounded-2xl p-3.5 space-y-2">
+                      <div className="text-[11px] font-bold text-emerald-300 border-b border-emerald-800/40 pb-1 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                          المبالغ والتحصيل المالي:
+                        </span>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                          whatsAppStudent.remainingAmount === 0
+                            ? 'bg-emerald-500 text-slate-950'
+                            : 'bg-amber-500 text-slate-950'
+                        }`}>
+                          {whatsAppStudent.remainingAmount === 0 ? 'خالص السداد بالكامل ✓' : 'سداد دفعة / عربون'}
+                        </span>
+                      </div>
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-xs text-slate-300">المبلغ المقبوض الآن:</span>
+                        <span className="text-xl font-black text-emerald-400 font-mono">
+                          {whatsAppStudent.paidAmount.toLocaleString()} ج.م
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-emerald-200/90 font-bold bg-emerald-900/30 p-1.5 rounded-lg">
+                        فقط: {numberToArabicWords(whatsAppStudent.paidAmount)}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-emerald-800/30">
+                        <div>
+                          <span className="text-slate-400 text-[11px] block">إجمالي التذكرة:</span>
+                          <strong className="text-white font-mono">{whatsAppStudent.totalAmount.toLocaleString()} ج.م</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 text-[11px] block">المبلغ المتبقي:</span>
+                          <strong className={whatsAppStudent.remainingAmount > 0 ? "text-rose-400 font-mono" : "text-emerald-400 font-mono"}>
+                            {whatsAppStudent.remainingAmount.toLocaleString()} ج.م
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Payment Method & Description */}
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 text-xs space-y-1.5 text-slate-300">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400">طريقة السداد:</span>
+                        <span className="bg-slate-800 px-2 py-0.5 rounded-md font-bold text-white">
+                          {whatsAppStudent.paymentMethod === 'vodafone_cash' ? 'فودافون كاش / إنستاباي' :
+                           whatsAppStudent.paymentMethod === 'instapay' ? 'إنستاباي (InstaPay)' :
+                           whatsAppStudent.paymentMethod === 'cash' ? 'نقداً باليد' :
+                           whatsAppStudent.paymentMethod === 'bank_transfer' ? 'تحويل بنكي' : 'محفظة إلكترونية'}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        الجهة المصدرة: <strong>إدارة الحسابات والمالية - كيان</strong>
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-slate-400 border-t border-slate-800/80 pt-1.5">
+                      <strong>البيان:</strong> {activeStudentVoucher.reason || `قيمة حجز تذكرة رحلة ${settings.tripName} للمشترك ${whatsAppStudent.name}`}
+                    </div>
+                  </div>
+
+                  {/* Action Toolbar for Receipt */}
+                  <div className="mt-4 pt-4 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => generateReceiptPDF(activeStudentVoucher, settings)}
+                      className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 text-xs transition shadow-md shadow-indigo-600/20 active:scale-95"
+                    >
+                      <Printer className="w-4 h-4" />
+                      <span>طباعة / تنزيل إيصال (PDF) 📄</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => exportReceiptAsHighResImage(activeStudentVoucher, settings)}
+                      className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 text-xs transition shadow-md shadow-amber-500/20 active:scale-95"
+                    >
+                      <ImageIcon className="w-4 h-4" />
+                      <span>تحميل الإيصال كصورة (HD PNG) 🖼️</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const receiptText = generateWhatsAppTicketText(whatsAppStudent, settings, 'receipt');
+                        sendCustomWhatsAppMessage(whatsAppPhone, receiptText);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 text-xs transition shadow-md shadow-emerald-600/20 active:scale-95"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>إرسال الإيصال بالواتساب 📲</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: TEXT MESSAGE CUSTOMIZER */}
             {whatsAppTab === 'text_message' && (
               <div className="space-y-3">
                 {/* Template Chooser Buttons */}
