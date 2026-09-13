@@ -48,6 +48,7 @@ import {
   DriverInfo,
   ExpenseItem,
   TShirtSize,
+  getStudentMealInfo,
   getCompanionMealInfo,
 } from '../types';
 
@@ -178,10 +179,11 @@ export const LogisticsInventory: React.FC<LogisticsInventoryProps> = ({
     const mealTypeCounts: Record<string, number> = {};
 
     students.forEach((student) => {
-      if (student.hasMeal) {
+      const mealInfo = getStudentMealInfo(student, settings);
+      if (mealInfo.hasMeal) {
         mainNeeded += 1;
         if (student.mealReceived) mainDelivered += 1;
-        const opt = student.mealOption || 'وجبة أساسية';
+        const opt = mealInfo.mealName;
         mealTypeCounts[opt] = (mealTypeCounts[opt] || 0) + 1;
       }
 

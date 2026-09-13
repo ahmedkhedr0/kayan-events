@@ -908,7 +908,10 @@ ${settings?.whatsappGroupLink ? `\n🔗 *جروب الواتساب الرسمي:
                             </div>
                             <p className="text-xs text-slate-400 mt-0.5">
                               {student.faculty || 'مشترك'} • تيشرت: <strong className="text-slate-200">{student.tshirtSize && student.tshirtSize !== 'none' && student.tshirtSize !== 'None' && student.tshirtSize !== 'بدون' ? student.tshirtSize : 'بدون'}</strong>
-                              {student.hasMeal ? ` • وجبة: ${student.mealOption || 'VIP'}` : ' • بدون وجبة'}
+                              {(() => {
+                                const mealInfo = getStudentMealInfo(student, settings);
+                                return mealInfo.hasMeal ? ` • وجبة: ${mealInfo.mealName}` : ' • بدون وجبة';
+                              })()}
                             </p>
                           </div>
                         </div>

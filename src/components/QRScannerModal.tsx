@@ -24,22 +24,30 @@ import {
   Clock,
   Zap,
   Lock,
+  BedDouble,
+  KeyRound,
+  Hotel,
+  Edit3,
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
-import { Student, PARTICIPANT_ROLES_CONFIG, ActiveUserSession } from '../types';
+import { Student, PARTICIPANT_ROLES_CONFIG, ActiveUserSession, HotelRoom, TripSettings, getStudentMealInfo } from '../types';
 
 interface QRScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   students: Student[];
+  settings?: TripSettings;
   userSession?: ActiveUserSession;
   onUpdateStudent?: (student: Student) => void;
   onToggleCheckInDeparture?: (studentId: string) => void;
   onToggleCheckInReturn?: (studentId: string) => void;
   onToggleTShirtReceived?: (studentId: string) => void;
   onToggleMealReceived?: (studentId: string) => void;
+  onToggleKeyReceived?: (studentId: string) => void;
+  onAssignStudentToRoom?: (studentId: string, roomNumber: string) => void;
   onOpenDigitalTicket?: (student: Student) => void;
   onCheckInStudentByCode?: (code: string) => { success: boolean; studentName?: string; message: string };
+  rooms?: HotelRoom[];
 }
 
 // Audio Beep & Haptic Vibration Feedback
@@ -93,14 +101,18 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   isOpen,
   onClose,
   students,
+  settings,
   userSession,
   onUpdateStudent,
   onToggleCheckInDeparture,
   onToggleCheckInReturn,
   onToggleTShirtReceived,
   onToggleMealReceived,
+  onToggleKeyReceived,
+  onAssignStudentToRoom,
   onOpenDigitalTicket,
   onCheckInStudentByCode,
+  rooms,
 }) => {
   const restrictedBus =
     userSession && userSession.role !== 'admin' && userSession.assignedBus && userSession.assignedBus > 0
@@ -133,11 +145,23 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   // Get currently selected/scanned student
   const currentStudent = students.find((s) => s.id === scannedStudentId) || null;
 
+  // Granular Operational Permissions Enforcement
+  const isAdmin = !userSession || userSession.role === 'admin';
+  const permissions = userSession?.permissions;
+  const canCheckInOut = isAdmin || permissions?.canCheckInOut !== false;
+  const canDeliverItems = isAdmin || permissions?.canDeliverItems !== false;
+  const canManageRooms = isAdmin || permissions?.canManageRooms !== false;
+  const canCollectPayments = isAdmin || permissions?.canCollectPayments !== false;
+
   // Global Check-in metrics (based on visible/permitted students)
   const totalStudents = visibleStudents.length;
   const departureCheckedCount = visibleStudents.filter((s) => s.checkInDeparture).length;
   const returnCheckedCount = visibleStudents.filter((s) => s.checkInReturn).length;
+  const totalTshirtsCount = visibleStudents.filter(
+    (s) => s.tshirtSize && s.tshirtSize !== 'none' && s.tshirtSize !== 'None' && s.tshirtSize !== 'بدون'
+  ).length;
   const tshirtDeliveredCount = visibleStudents.filter((s) => s.tshirtReceived).length;
+  const totalMealsCount = visibleStudents.filter((s) => s.hasMeal).length;
   const mealDeliveredCount = visibleStudents.filter((s) => s.mealReceived).length;
 
   // Parse and match any code (JSON or Plain String)
@@ -394,16 +418,38 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
     }
   };
 
+  const handleToggleKey = (student: Student) => {
+    if (onToggleKeyReceived) {
+      onToggleKeyReceived(student.id);
+    } else if (onUpdateStudent) {
+      onUpdateStudent({
+        ...student,
+        keyReceived: !student.keyReceived,
+      });
+    }
+    playScannerBeep(true);
+  };
+
   // Master 1-Click All-in-One Shortcut
   const handleMarkAllReceivedAndChecked = (student: Student) => {
     const timeNow = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+    const hasTshirt = Boolean(
+      student.tshirtSize &&
+      student.tshirtSize !== 'none'
+    );
+    const companionHasTshirt = Boolean(
+      student.hasCompanion &&
+      student.companionTShirtSize &&
+      student.companionTShirtSize !== 'none'
+    );
+
     const updated: Student = {
       ...student,
       checkInDeparture: true,
       departureTime: student.departureTime || timeNow,
-      tshirtReceived: true,
+      tshirtReceived: hasTshirt ? true : student.tshirtReceived,
       mealReceived: student.hasMeal ? true : student.mealReceived,
-      companionTshirtReceived: student.hasCompanion ? true : student.companionTshirtReceived,
+      companionTshirtReceived: companionHasTshirt ? true : student.companionTshirtReceived,
       companionMealReceived: student.hasCompanion && student.companionHasMeal ? true : student.companionMealReceived,
     };
 
@@ -411,9 +457,14 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
       onUpdateStudent(updated);
     }
     playScannerBeep(true);
+
+    const recorded: string[] = ['حضور'];
+    if (hasTshirt) recorded.push('تيشرت');
+    if (student.hasMeal) recorded.push('وجبة');
+
     setScanResult({
       success: true,
-      message: `✓ تم تسجيل حضور الذهاب واستلام التيشرت والوجبة بالكامل لـ ${student.name}`,
+      message: `✓ تم تسجيل (${recorded.join(' + ')}) بالكامل لـ ${student.name}`,
     });
   };
 
@@ -433,8 +484,8 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-xl rounded-3xl shadow-2xl relative overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 overflow-y-auto" dir="rtl">
+      <div className="bg-slate-900 border-2 border-emerald-500/40 w-full max-w-2xl sm:max-w-3xl rounded-3xl shadow-2xl shadow-emerald-500/10 relative overflow-hidden flex flex-col max-h-[94vh]">
         {/* Header */}
         <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 px-5 py-4 border-b border-slate-800 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-3">
@@ -475,32 +526,45 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
         </div>
 
         {/* Global Progress Bar Barometer */}
-        <div className="bg-slate-950/70 border-b border-slate-800/80 px-4 py-2.5 grid grid-cols-4 gap-2 text-center text-xs shrink-0">
-          <div className="bg-indigo-950/40 border border-indigo-500/20 rounded-xl p-1.5">
-            <span className="text-[10px] text-slate-400 block">ذهاب</span>
-            <span className="text-xs font-bold text-indigo-300 font-mono">
-              {departureCheckedCount}/{totalStudents}
-            </span>
-          </div>
-          <div className="bg-emerald-950/40 border border-emerald-500/20 rounded-xl p-1.5">
-            <span className="text-[10px] text-slate-400 block">عودة</span>
-            <span className="text-xs font-bold text-emerald-300 font-mono">
-              {returnCheckedCount}/{totalStudents}
-            </span>
-          </div>
-          <div className="bg-amber-950/40 border border-amber-500/20 rounded-xl p-1.5">
-            <span className="text-[10px] text-slate-400 block">تيشرت</span>
-            <span className="text-xs font-bold text-amber-300 font-mono">
-              {tshirtDeliveredCount}/{totalStudents}
-            </span>
-          </div>
-          <div className="bg-purple-950/40 border border-purple-500/20 rounded-xl p-1.5">
-            <span className="text-[10px] text-slate-400 block">وجبات</span>
-            <span className="text-xs font-bold text-purple-300 font-mono">
-              {mealDeliveredCount}/{totalStudents}
-            </span>
-          </div>
-        </div>
+        {(() => {
+          const showTshirts = totalTshirtsCount > 0;
+          const showMeals = totalMealsCount > 0;
+          const colsCount = 2 + (showTshirts ? 1 : 0) + (showMeals ? 1 : 0);
+          const gridClass = colsCount === 4 ? 'grid-cols-4' : colsCount === 3 ? 'grid-cols-3' : 'grid-cols-2';
+
+          return (
+            <div className={`bg-slate-950/70 border-b border-slate-800/80 px-4 py-2.5 grid ${gridClass} gap-2 text-center text-xs shrink-0`}>
+              <div className="bg-indigo-950/40 border border-indigo-500/20 rounded-xl p-1.5">
+                <span className="text-[10px] text-slate-400 block">ذهاب</span>
+                <span className="text-xs font-bold text-indigo-300 font-mono">
+                  {departureCheckedCount}/{totalStudents}
+                </span>
+              </div>
+              <div className="bg-emerald-950/40 border border-emerald-500/20 rounded-xl p-1.5">
+                <span className="text-[10px] text-slate-400 block">عودة</span>
+                <span className="text-xs font-bold text-emerald-300 font-mono">
+                  {returnCheckedCount}/{totalStudents}
+                </span>
+              </div>
+              {showTshirts && (
+                <div className="bg-amber-950/40 border border-amber-500/20 rounded-xl p-1.5">
+                  <span className="text-[10px] text-slate-400 block">تيشرت</span>
+                  <span className="text-xs font-bold text-amber-300 font-mono">
+                    {tshirtDeliveredCount}/{totalTshirtsCount}
+                  </span>
+                </div>
+              )}
+              {showMeals && (
+                <div className="bg-purple-950/40 border border-purple-500/20 rounded-xl p-1.5">
+                  <span className="text-[10px] text-slate-400 block">وجبات</span>
+                  <span className="text-xs font-bold text-purple-300 font-mono">
+                    {mealDeliveredCount}/{totalMealsCount}
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Main Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
@@ -574,31 +638,33 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Payment Status */}
-                  <div
-                    className={`rounded-2xl p-2.5 border flex items-center gap-2.5 ${
-                      currentStudent.paymentStatus === 'paid'
-                        ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
-                        : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
-                    }`}
-                  >
-                    <div className="p-2 rounded-xl bg-black/20 shrink-0">
-                      <CreditCard className="w-4 h-4" />
+                  {/* Payment Status (Only if canCollectPayments is true) */}
+                  {canCollectPayments && (
+                    <div
+                      className={`rounded-2xl p-2.5 border flex items-center gap-2.5 ${
+                        currentStudent.paymentStatus === 'paid'
+                          ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                          : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+                      }`}
+                    >
+                      <div className="p-2 rounded-xl bg-black/20 shrink-0">
+                        <CreditCard className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-medium">حالة السداد</span>
+                        <strong className="text-xs font-black block">
+                          {currentStudent.paymentStatus === 'paid'
+                            ? 'مسدد بالكامل ✓'
+                            : currentStudent.paymentStatus === 'deposit'
+                            ? `عربون (متبقي ${currentStudent.remainingAmount} ج.م)`
+                            : `غير مسدد (${currentStudent.totalAmount} ج.م)`}
+                        </strong>
+                        <span className="text-[10px] text-slate-300 font-mono">
+                          {currentStudent.paidAmount} / {currentStudent.totalAmount} ج.م
+                        </span>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-medium">حالة السداد</span>
-                      <strong className="text-xs font-black block">
-                        {currentStudent.paymentStatus === 'paid'
-                          ? 'مسدد بالكامل ✓'
-                          : currentStudent.paymentStatus === 'deposit'
-                          ? `عربون (متبقي ${currentStudent.remainingAmount} ج.م)`
-                          : `غير مسدد (${currentStudent.totalAmount} ج.م)`}
-                      </strong>
-                      <span className="text-[10px] text-slate-300 font-mono">
-                        {currentStudent.paidAmount} / {currentStudent.totalAmount} ج.م
-                      </span>
-                    </div>
-                  </div>
+                  )}
 
                   {/* Pickup point */}
                   <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-2.5 col-span-2 sm:col-span-1 flex items-center gap-2.5">
@@ -656,285 +722,337 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {/* 1. حضور الذهاب */}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleDeparture(currentStudent)}
-                      className={`p-3 rounded-2xl border text-right transition-all flex items-center justify-between group ${
-                        currentStudent.checkInDeparture
-                          ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200 shadow-md shadow-emerald-950/50'
-                          : 'bg-slate-950/80 border-slate-800 hover:border-indigo-500/60 text-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                            currentStudent.checkInDeparture
-                              ? 'bg-emerald-500 text-slate-950 font-black'
-                              : 'bg-slate-800 text-slate-400 group-hover:text-indigo-300'
-                          }`}
-                        >
-                          <UserCheck className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <strong className="text-xs font-black">حضور الذهاب (التحرك)</strong>
-                          </div>
-                          <span className="text-[10px] text-slate-400 block mt-0.5 font-mono">
-                            {currentStudent.checkInDeparture
-                              ? `✓ تم التحضير (${currentStudent.departureTime || 'تجمع الصباح'})`
-                              : '⏳ لم يسجل حضور الذهاب'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div
-                        className={`w-6 h-6 rounded-full flex items-center justify-center border text-xs font-black ${
-                          currentStudent.checkInDeparture
-                            ? 'bg-emerald-500 border-emerald-400 text-slate-950'
-                            : 'border-slate-700 bg-slate-900 text-slate-500'
-                        }`}
-                      >
-                        {currentStudent.checkInDeparture ? '✓' : ''}
-                      </div>
-                    </button>
-
-                    {/* 2. حضور العودة */}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleReturn(currentStudent)}
-                      className={`p-3 rounded-2xl border text-right transition-all flex items-center justify-between group ${
-                        currentStudent.checkInReturn
-                          ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200 shadow-md shadow-emerald-950/50'
-                          : 'bg-slate-950/80 border-slate-800 hover:border-indigo-500/60 text-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                            currentStudent.checkInReturn
-                              ? 'bg-emerald-500 text-slate-950 font-black'
-                              : 'bg-slate-800 text-slate-400 group-hover:text-indigo-300'
-                          }`}
-                        >
-                          <RotateCw className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <strong className="text-xs font-black">حضور العودة (المساء)</strong>
-                          </div>
-                          <span className="text-[10px] text-slate-400 block mt-0.5 font-mono">
-                            {currentStudent.checkInReturn
-                              ? `✓ تم تأكيد العودة (${currentStudent.returnTime || 'باص العودة'})`
-                              : '⏳ لم يسجل حضور العودة'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div
-                        className={`w-6 h-6 rounded-full flex items-center justify-center border text-xs font-black ${
-                          currentStudent.checkInReturn
-                            ? 'bg-emerald-500 border-emerald-400 text-slate-950'
-                            : 'border-slate-700 bg-slate-900 text-slate-500'
-                        }`}
-                      >
-                        {currentStudent.checkInReturn ? '✓' : ''}
-                      </div>
-                    </button>
-
-                    {/* 3. استلام التيشرت - Only show if student has a tshirt, or show 'غير مشمول' state */}
-                    {currentStudent.tshirtSize &&
-                    currentStudent.tshirtSize !== 'none' &&
-                    currentStudent.tshirtSize !== 'None' &&
-                    currentStudent.tshirtSize !== 'بدون' ? (
+                    {/* 1. حضور الذهاب (When canCheckInOut is true) */}
+                    {canCheckInOut && (
                       <button
                         type="button"
-                        onClick={() => handleToggleTShirt(currentStudent)}
+                        onClick={() => handleToggleDeparture(currentStudent)}
                         className={`p-3 rounded-2xl border text-right transition-all flex items-center justify-between group ${
-                          currentStudent.tshirtReceived
-                            ? 'bg-amber-950/80 border-amber-500 text-amber-200 shadow-md shadow-amber-950/50'
-                            : 'bg-slate-950/80 border-slate-800 hover:border-amber-500/60 text-slate-300'
+                          currentStudent.checkInDeparture
+                            ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200 shadow-md shadow-emerald-950/50'
+                            : 'bg-slate-950/80 border-slate-800 hover:border-indigo-500/60 text-slate-300'
                         }`}
                       >
                         <div className="flex items-center gap-3">
                           <div
                             className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                              currentStudent.tshirtReceived
-                                ? 'bg-amber-500 text-slate-950 font-black'
-                                : 'bg-slate-800 text-slate-400 group-hover:text-amber-300'
+                              currentStudent.checkInDeparture
+                                ? 'bg-emerald-500 text-slate-950 font-black'
+                                : 'bg-slate-800 text-slate-400 group-hover:text-indigo-300'
                             }`}
                           >
-                            <Shirt className="w-5 h-5" />
+                            <UserCheck className="w-5 h-5" />
                           </div>
                           <div>
                             <div className="flex items-center gap-1.5">
-                              <strong className="text-xs font-black">استلام التيشرت</strong>
-                              <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] px-1.5 py-0.2 rounded font-mono font-bold">
-                                {currentStudent.tshirtSize}
-                              </span>
+                              <strong className="text-xs font-black">حضور الذهاب (التحرك)</strong>
                             </div>
-                            <span className="text-[10px] text-slate-400 block mt-0.5">
-                              {currentStudent.tshirtReceived
-                                ? `✓ تم تسليم التيشرت (مقاس ${currentStudent.tshirtSize})`
-                                : `⏳ في انتظار التسليم (مقاس ${currentStudent.tshirtSize})`}
+                            <span className="text-[10px] text-slate-400 block mt-0.5 font-mono">
+                              {currentStudent.checkInDeparture
+                                ? `✓ تم التحضير (${currentStudent.departureTime || 'تجمع الصباح'})`
+                                : '⏳ لم يسجل حضور الذهاب'}
                             </span>
                           </div>
                         </div>
 
                         <div
                           className={`w-6 h-6 rounded-full flex items-center justify-center border text-xs font-black ${
-                            currentStudent.tshirtReceived
-                              ? 'bg-amber-500 border-amber-400 text-slate-950'
+                            currentStudent.checkInDeparture
+                              ? 'bg-emerald-500 border-emerald-400 text-slate-950'
                               : 'border-slate-700 bg-slate-900 text-slate-500'
                           }`}
                         >
-                          {currentStudent.tshirtReceived ? '✓' : ''}
+                          {currentStudent.checkInDeparture ? '✓' : ''}
                         </div>
                       </button>
-                    ) : (
-                      <div className="p-3 rounded-2xl border border-slate-800/80 bg-slate-950/40 text-right flex items-center justify-between opacity-70">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-slate-900 text-slate-600 flex items-center justify-center shrink-0">
-                            <Shirt className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <strong className="text-xs font-bold text-slate-400 block">التيشرت</strong>
-                            <span className="text-[10px] text-slate-400 block">التذكرة بدون تيشرت</span>
-                          </div>
-                        </div>
-                        <span className="bg-slate-900 text-slate-400 text-[10px] px-2 py-0.5 rounded-lg font-bold border border-slate-800">
-                          غير مشمول ✕
-                        </span>
-                      </div>
                     )}
 
-                    {/* 4. استلام الوجبة - Only show if student has a meal option */}
-                    {currentStudent.hasMeal ? (
+                    {/* 2. حضور العودة (When canCheckInOut is true) */}
+                    {canCheckInOut && (
                       <button
                         type="button"
-                        onClick={() => handleToggleMeal(currentStudent)}
+                        onClick={() => handleToggleReturn(currentStudent)}
                         className={`p-3 rounded-2xl border text-right transition-all flex items-center justify-between group ${
-                          currentStudent.mealReceived
-                            ? 'bg-purple-950/80 border-purple-500 text-purple-200 shadow-md shadow-purple-950/50'
-                            : 'bg-slate-950/80 border-slate-800 hover:border-purple-500/60 text-slate-300'
+                          currentStudent.checkInReturn
+                            ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200 shadow-md shadow-emerald-950/50'
+                            : 'bg-slate-950/80 border-slate-800 hover:border-indigo-500/60 text-slate-300'
                         }`}
                       >
                         <div className="flex items-center gap-3">
                           <div
                             className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                              currentStudent.mealReceived
-                                ? 'bg-purple-500 text-white font-black'
-                                : 'bg-slate-800 text-slate-400 group-hover:text-purple-300'
+                              currentStudent.checkInReturn
+                                ? 'bg-emerald-500 text-slate-950 font-black'
+                                : 'bg-slate-800 text-slate-400 group-hover:text-indigo-300'
                             }`}
                           >
-                            <UtensilsCrossed className="w-5 h-5" />
+                            <RotateCw className="w-5 h-5" />
                           </div>
                           <div>
                             <div className="flex items-center gap-1.5">
-                              <strong className="text-xs font-black">استلام الوجبة</strong>
-                              <span className="bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[9px] px-1.5 py-0.2 rounded font-bold">
-                                {currentStudent.mealOption || 'وجبة'}
-                              </span>
+                              <strong className="text-xs font-black">حضور العودة (المساء)</strong>
                             </div>
-                            <span className="text-[10px] text-slate-400 block mt-0.5 truncate max-w-[140px]">
-                              {currentStudent.mealReceived
-                                ? '✓ تم تسليم وجبة الطعام'
-                                : `⏳ في انتظار التسليم (${currentStudent.mealOption || 'وجبة'})`}
+                            <span className="text-[10px] text-slate-400 block mt-0.5 font-mono">
+                              {currentStudent.checkInReturn
+                                ? `✓ تم تأكيد العودة (${currentStudent.returnTime || 'باص العودة'})`
+                                : '⏳ لم يسجل حضور العودة'}
                             </span>
                           </div>
                         </div>
 
                         <div
                           className={`w-6 h-6 rounded-full flex items-center justify-center border text-xs font-black ${
+                            currentStudent.checkInReturn
+                              ? 'bg-emerald-500 border-emerald-400 text-slate-950'
+                              : 'border-slate-700 bg-slate-900 text-slate-500'
+                          }`}
+                        >
+                          {currentStudent.checkInReturn ? '✓' : ''}
+                        </div>
+                      </button>
+                    )}
+
+                    {/* 3. استلام التيشرت (When canDeliverItems is true) */}
+                    {canDeliverItems &&
+                      currentStudent.tshirtSize &&
+                      currentStudent.tshirtSize !== 'none' &&
+                      currentStudent.tshirtSize !== 'None' &&
+                      currentStudent.tshirtSize !== 'بدون' && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleTShirt(currentStudent)}
+                          className={`p-3 rounded-2xl border text-right transition-all flex items-center justify-between group ${
+                            currentStudent.tshirtReceived
+                              ? 'bg-amber-950/80 border-amber-500 text-amber-200 shadow-md shadow-amber-950/50'
+                              : 'bg-slate-950/80 border-slate-800 hover:border-amber-500/60 text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                currentStudent.tshirtReceived
+                                  ? 'bg-amber-500 text-slate-950 font-black'
+                                  : 'bg-slate-800 text-slate-400 group-hover:text-amber-300'
+                              }`}
+                            >
+                              <Shirt className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <strong className="text-xs font-black">استلام التيشرت</strong>
+                                <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] px-1.5 py-0.2 rounded font-mono font-bold">
+                                  {currentStudent.tshirtSize}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-slate-400 block mt-0.5">
+                                {currentStudent.tshirtReceived
+                                  ? `✓ تم تسليم التيشرت (مقاس ${currentStudent.tshirtSize})`
+                                  : `⏳ في انتظار التسليم (مقاس ${currentStudent.tshirtSize})`}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center border text-xs font-black ${
+                              currentStudent.tshirtReceived
+                                ? 'bg-amber-500 border-amber-400 text-slate-950'
+                                : 'border-slate-700 bg-slate-900 text-slate-500'
+                            }`}
+                          >
+                            {currentStudent.tshirtReceived ? '✓' : ''}
+                          </div>
+                        </button>
+                      )}
+
+                    {/* 4. استلام الوجبة (When canDeliverItems is true) */}
+                    {(() => {
+                      const mealInfo = getStudentMealInfo(currentStudent, settings);
+                      if (!canDeliverItems || !mealInfo.hasMeal) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleMeal(currentStudent)}
+                          className={`p-3 rounded-2xl border text-right transition-all flex items-center justify-between group ${
                             currentStudent.mealReceived
+                              ? 'bg-purple-950/80 border-purple-500 text-purple-200 shadow-md shadow-purple-950/50'
+                              : 'bg-slate-950/80 border-slate-800 hover:border-purple-500/60 text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                currentStudent.mealReceived
+                                  ? 'bg-purple-500 text-white font-black'
+                                  : 'bg-slate-800 text-slate-400 group-hover:text-purple-300'
+                              }`}
+                            >
+                              <UtensilsCrossed className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <strong className="text-xs font-black">استلام الوجبة</strong>
+                                <span className="bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[9px] px-1.5 py-0.2 rounded font-bold">
+                                  {mealInfo.mealName}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-slate-400 block mt-0.5 truncate max-w-[140px]">
+                                {currentStudent.mealReceived
+                                  ? '✓ تم تسليم وجبة الطعام'
+                                  : `⏳ في انتظار التسليم (${mealInfo.mealName})`}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center border text-xs font-black ${
+                              currentStudent.mealReceived
+                                ? 'bg-purple-500 border-purple-400 text-white'
+                                : 'border-slate-700 bg-slate-900 text-slate-500'
+                            }`}
+                          >
+                            {currentStudent.mealReceived ? '✓' : ''}
+                          </div>
+                        </button>
+                      );
+                    })()}
+
+                    {/* 5. تسليم مفتاح الغرفة والتسكين الفندقي (When canManageRooms is true AND student has a room) */}
+                    {canManageRooms && currentStudent.roomNumber && currentStudent.roomNumber.trim() !== '' && (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleKey(currentStudent)}
+                        className={`p-3 rounded-2xl border text-right transition-all flex items-center justify-between group cursor-pointer ${
+                          currentStudent.keyReceived
+                            ? 'bg-purple-950/80 border-purple-500 text-purple-200 shadow-md shadow-purple-950/50'
+                            : 'bg-purple-950/30 border-purple-500/50 text-purple-300 hover:border-purple-400'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                              currentStudent.keyReceived
+                                ? 'bg-purple-500 text-white font-black'
+                                : 'bg-purple-900/60 text-purple-300 border border-purple-500/40'
+                            }`}
+                          >
+                            <KeyRound className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <strong className="text-xs font-black">
+                                مفتاح غرفة #{currentStudent.roomNumber}
+                              </strong>
+                            </div>
+                            <span className="text-[10px] text-slate-400 block mt-0.5">
+                              {currentStudent.keyReceived
+                                ? '✓ تم تسليم المفتاح'
+                                : '⏳ بانتظار تسليم المفتاح'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`w-6 h-6 rounded-full flex items-center justify-center border text-xs font-black ${
+                            currentStudent.keyReceived
                               ? 'bg-purple-500 border-purple-400 text-white'
                               : 'border-slate-700 bg-slate-900 text-slate-500'
                           }`}
                         >
-                          {currentStudent.mealReceived ? '✓' : ''}
+                          {currentStudent.keyReceived ? '✓' : ''}
                         </div>
                       </button>
-                    ) : (
-                      <div className="p-3 rounded-2xl border border-slate-800/80 bg-slate-950/40 text-right flex items-center justify-between opacity-70">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-slate-900 text-slate-600 flex items-center justify-center shrink-0">
-                            <UtensilsCrossed className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <strong className="text-xs font-bold text-slate-400 block">وجبة الطعام</strong>
-                            <span className="text-[10px] text-slate-400 block">التذكرة بدون وجبة</span>
-                          </div>
-                        </div>
-                        <span className="bg-slate-900 text-slate-400 text-[10px] px-2 py-0.5 rounded-lg font-bold border border-slate-800">
-                          غير مشمول ✕
-                        </span>
-                      </div>
                     )}
                   </div>
                 </div>
 
                 {/* Companion Sub-Card */}
-                {currentStudent.hasCompanion && currentStudent.companionName && (
-                  <div className="bg-slate-950/90 border border-amber-500/40 rounded-2xl p-3.5 space-y-2.5">
-                    <div className="flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2 text-amber-300 font-bold">
-                        <Users className="w-4 h-4 text-amber-400" />
-                        <span>مرافق الحجز: <strong className="text-white">{currentStudent.companionName}</strong></span>
+                {currentStudent.hasCompanion && currentStudent.companionName && canDeliverItems && (() => {
+                  const companionHasTshirt = Boolean(
+                    currentStudent.companionTShirtSize &&
+                    currentStudent.companionTShirtSize !== 'none' &&
+                    currentStudent.companionTShirtSize !== 'None' &&
+                    currentStudent.companionTShirtSize !== 'بدون'
+                  );
+                  const companionHasMeal = Boolean(currentStudent.companionHasMeal);
+                  const companionActionsCount = (companionHasTshirt ? 1 : 0) + (companionHasMeal ? 1 : 0);
+
+                  return (
+                    <div className="bg-slate-950/90 border border-amber-500/40 rounded-2xl p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2 text-amber-300 font-bold">
+                          <Users className="w-4 h-4 text-amber-400" />
+                          <span>مرافق الحجز: <strong className="text-white">{currentStudent.companionName}</strong></span>
+                        </div>
+                        <span className="text-slate-400 text-[10px] font-mono">
+                          {currentStudent.companionSeatNumber ? `مقعد #${currentStudent.companionSeatNumber}` : ''}
+                        </span>
                       </div>
-                      <span className="text-slate-400 text-[10px] font-mono">
-                        {currentStudent.companionSeatNumber ? `مقعد #${currentStudent.companionSeatNumber}` : ''}
-                      </span>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleCompanionTshirt(currentStudent)}
-                        className={`p-2 rounded-xl border text-right transition-all flex items-center justify-between ${
-                          currentStudent.companionTshirtReceived
-                            ? 'bg-amber-950/70 border-amber-500 text-amber-300'
-                            : 'bg-slate-900 border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Shirt className="w-3.5 h-3.5 text-amber-400" />
-                          <span className="text-[11px] font-bold">
-                            تيشرت المرافق ({currentStudent.companionTShirtSize || 'L'})
-                          </span>
-                        </div>
-                        <span>{currentStudent.companionTshirtReceived ? '✓' : '⏳'}</span>
-                      </button>
+                      {companionActionsCount > 0 && (
+                        <div className={`grid ${companionActionsCount === 2 ? 'grid-cols-2' : 'grid-cols-1'} gap-2 text-xs`}>
+                          {companionHasTshirt && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCompanionTshirt(currentStudent)}
+                              className={`p-2 rounded-xl border text-right transition-all flex items-center justify-between ${
+                                currentStudent.companionTshirtReceived
+                                  ? 'bg-amber-950/70 border-amber-500 text-amber-300'
+                                  : 'bg-slate-900 border-slate-800 text-slate-400'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <Shirt className="w-3.5 h-3.5 text-amber-400" />
+                                <span className="text-[11px] font-bold">
+                                  تيشرت المرافق ({currentStudent.companionTShirtSize || 'L'})
+                                </span>
+                              </div>
+                              <span>{currentStudent.companionTshirtReceived ? '✓' : '⏳'}</span>
+                            </button>
+                          )}
 
-                      <button
-                        type="button"
-                        onClick={() => handleToggleCompanionMeal(currentStudent)}
-                        className={`p-2 rounded-xl border text-right transition-all flex items-center justify-between ${
-                          currentStudent.companionMealReceived
-                            ? 'bg-purple-950/70 border-purple-500 text-purple-300'
-                            : 'bg-slate-900 border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <UtensilsCrossed className="w-3.5 h-3.5 text-purple-400" />
-                          <span className="text-[11px] font-bold">وجبة المرافق</span>
+                          {companionHasMeal && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCompanionMeal(currentStudent)}
+                              className={`p-2 rounded-xl border text-right transition-all flex items-center justify-between ${
+                                currentStudent.companionMealReceived
+                                  ? 'bg-purple-950/70 border-purple-500 text-purple-300'
+                                  : 'bg-slate-900 border-slate-800 text-slate-400'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <UtensilsCrossed className="w-3.5 h-3.5 text-purple-400" />
+                                <span className="text-[11px] font-bold">وجبة المرافق</span>
+                              </div>
+                              <span>{currentStudent.companionMealReceived ? '✓' : '⏳'}</span>
+                            </button>
+                          )}
                         </div>
-                        <span>{currentStudent.companionMealReceived ? '✓' : '⏳'}</span>
-                      </button>
+                      )}
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Bottom Master Action Buttons */}
                 <div className="pt-2 border-t border-slate-800/80 flex items-center gap-2 flex-wrap sm:flex-nowrap">
-                  {/* Master 1-Click Check All Button */}
-                  <button
-                    type="button"
-                    onClick={() => handleMarkAllReceivedAndChecked(currentStudent)}
-                    className="flex-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-transform active:scale-98"
-                  >
-                    <Sparkles className="w-4 h-4 text-slate-950" />
-                    <span>تسجيل الكل بنقرة واحدة (حضور + تيشرت + وجبة)</span>
-                  </button>
+                  {/* Master 1-Click Check All Button (Only if canCheckInOut & canDeliverItems) */}
+                  {canCheckInOut && canDeliverItems && (
+                    <button
+                      type="button"
+                      onClick={() => handleMarkAllReceivedAndChecked(currentStudent)}
+                      className="flex-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-transform active:scale-98 cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4 text-slate-950" />
+                      <span>
+                        {(() => {
+                          const parts = ['حضور'];
+                          if (currentStudent.tshirtSize && currentStudent.tshirtSize !== 'none' && currentStudent.tshirtSize !== 'None' && currentStudent.tshirtSize !== 'بدون') parts.push('تيشرت');
+                          if (currentStudent.hasMeal) parts.push('وجبة');
+                          return `تسجيل بنقرة واحدة (${parts.join(' + ')})`;
+                        })()}
+                      </span>
+                    </button>
+                  )}
 
                   {/* View Full Digital Ticket Card */}
                   {onOpenDigitalTicket && (
@@ -997,44 +1115,118 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
 
               {/* CAMERA TAB */}
               {activeTab === 'camera' && (
-                <div className="space-y-3">
-                  <div className="bg-slate-950 border-2 border-amber-500/50 rounded-3xl p-3 text-center relative overflow-hidden space-y-2">
-                    {/* Live Camera Container */}
-                    <div className="relative w-full min-h-[270px] bg-black rounded-2xl overflow-hidden flex items-center justify-center border border-slate-800">
-                      {/* Target element for html5-qrcode */}
-                      <div id={qrRegionId} className="w-full h-full"></div>
+                <div className="space-y-4">
+                  {/* Outer Cyber Neon Glowing Frame */}
+                  <div className="p-1 rounded-3xl bg-gradient-to-r from-emerald-500 via-amber-400 via-cyan-400 to-emerald-500 shadow-[0_0_35px_rgba(16,185,129,0.25)] cyber-neon-border">
+                    <div className="bg-[#050B17] rounded-[22px] p-3 sm:p-4 text-center relative overflow-hidden space-y-3">
+                      {/* Live Camera Viewport Container */}
+                      <div className="relative w-full min-h-[380px] sm:min-h-[460px] md:min-h-[500px] bg-black rounded-2xl overflow-hidden flex items-center justify-center border-2 border-emerald-500/40 cyber-scanner-viewport shadow-2xl">
+                        {/* Target element for html5-qrcode */}
+                        <div id={qrRegionId} className="w-full h-full min-h-[380px] sm:min-h-[460px] md:min-h-[500px]"></div>
 
-                      {/* Camera Switch Floating Button */}
-                      {isScanning && (
-                        <button
-                          type="button"
-                          onClick={toggleCamera}
-                          className="absolute top-3 left-3 bg-slate-900/85 backdrop-blur-md text-amber-400 px-3 py-1.5 rounded-xl border border-amber-500/40 hover:bg-slate-800 z-20 flex items-center gap-1.5 text-xs font-bold shadow-lg"
-                          title="تبديل الكاميرا (أمامية / خلفية)"
-                        >
-                          <FlipHorizontal className="w-4 h-4" />
-                          <span>تبديل الكاميرا</span>
-                        </button>
-                      )}
+                        {/* Animated Cyber Scanner HUD Overlay */}
+                        {isScanning && !cameraError && (
+                          <div className="absolute inset-0 pointer-events-none z-10 flex flex-col justify-between p-4 sm:p-8 overflow-hidden">
+                            {/* Top HUD Row */}
+                            <div className="flex justify-between items-start">
+                              <div className="w-12 h-12 sm:w-16 sm:h-16 border-t-4 border-r-4 border-amber-400 rounded-tr-2xl shadow-[0_0_15px_#f59e0b]"></div>
+                              <div className="flex items-center gap-2 bg-slate-950/80 backdrop-blur-md border border-emerald-500/50 px-3 py-1 rounded-full text-[11px] font-black text-emerald-300">
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                                مسح نشط 60 FPS
+                              </div>
+                              <div className="w-12 h-12 sm:w-16 sm:h-16 border-t-4 border-l-4 border-amber-400 rounded-tl-2xl shadow-[0_0_15px_#f59e0b]"></div>
+                            </div>
 
-                      {/* Camera Error Message */}
-                      {cameraError && (
-                        <div className="p-4 text-center space-y-2 z-10">
-                          <AlertCircle className="w-10 h-10 text-rose-500 mx-auto" />
-                          <p className="text-xs text-rose-300 font-bold">{cameraError}</p>
-                          <button
-                            onClick={startCamera}
-                            className="bg-amber-500 text-slate-950 font-bold px-3 py-1.5 rounded-xl text-xs inline-flex items-center gap-1 mt-2"
-                          >
-                            <RefreshCw className="w-3.5 h-3.5" /> إعادة المحاولة
-                          </button>
-                        </div>
-                      )}
+                            {/* Central Targeting Reticle & Circular Crosshair */}
+                            <div className="relative mx-auto flex items-center justify-center">
+                              {/* Central Target Frame with Pulse */}
+                              <div className="w-52 h-52 sm:w-64 sm:h-64 rounded-3xl border-2 border-dashed border-emerald-400/60 cyber-target-frame flex items-center justify-center relative">
+                                {/* Crosshair Center Pin */}
+                                <div className="w-4 h-4 border-t-2 border-b-2 border-amber-400"></div>
+                                <div className="h-4 w-4 border-r-2 border-l-2 border-amber-400 absolute"></div>
+                                <div className="absolute inset-0 rounded-full border border-cyan-400/20"></div>
+
+                                {/* Radar Sweep Arc */}
+                                <div className="absolute inset-1 rounded-full overflow-hidden opacity-25">
+                                  <div className="w-full h-full cyber-radar-sweep bg-[conic-gradient(from_0deg,transparent_0deg,transparent_270deg,#10b981_360deg)]"></div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Sweeping Laser Line with Neon Glow */}
+                            <div className="absolute inset-x-4 h-1 bg-gradient-to-r from-transparent via-emerald-300 to-transparent shadow-[0_0_20px_#10b981] cyber-laser-beam z-20 pointer-events-none">
+                              <div className="w-full h-full bg-white/70 blur-[0.5px]"></div>
+                            </div>
+
+                            {/* Bottom HUD Row */}
+                            <div className="flex justify-between items-end">
+                              <div className="w-12 h-12 sm:w-16 sm:h-16 border-b-4 border-r-4 border-amber-400 rounded-br-2xl shadow-[0_0_15px_#f59e0b]"></div>
+                              <div className="bg-slate-950/80 backdrop-blur-md border border-amber-500/40 px-3 py-1 rounded-full text-[11px] font-bold text-amber-300 flex items-center gap-1.5">
+                                <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-spin" style={{ animationDuration: '4s' }} />
+                                ضع رمز الـ QR داخل الإطار
+                              </div>
+                              <div className="w-12 h-12 sm:w-16 sm:h-16 border-b-4 border-l-4 border-amber-400 rounded-bl-2xl shadow-[0_0_15px_#f59e0b]"></div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Top Control Bar: Camera Switch & Beep Sound Indicator */}
+                        {isScanning && (
+                          <div className="absolute top-3 inset-x-3 flex items-center justify-between pointer-events-auto z-30">
+                            <button
+                              type="button"
+                              onClick={toggleCamera}
+                              className="bg-slate-900/90 backdrop-blur-md text-amber-400 px-3.5 py-2 rounded-xl border border-amber-500/50 hover:bg-slate-800 hover:text-amber-300 flex items-center gap-2 text-xs font-black shadow-xl cursor-pointer active:scale-95 transition"
+                              title="تبديل الكاميرا (أمامية / خلفية)"
+                            >
+                              <FlipHorizontal className="w-4 h-4 text-amber-400" />
+                              <span>تبديل الكاميرا</span>
+                            </button>
+
+                            <div className="bg-slate-900/90 backdrop-blur-md text-emerald-300 px-3 py-1.5 rounded-xl border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 shadow-lg">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                              <span>الصوت مفعل 🔔</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Camera Error Message */}
+                        {cameraError && (
+                          <div className="p-6 text-center space-y-3 z-10 max-w-sm">
+                            <div className="w-14 h-14 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center mx-auto text-rose-400">
+                              <AlertCircle className="w-8 h-8" />
+                            </div>
+                            <h4 className="text-sm font-black text-rose-200">تعذر تشغيل الكاميرا</h4>
+                            <p className="text-xs text-slate-300 leading-relaxed">{cameraError}</p>
+                            <button
+                              onClick={startCamera}
+                              className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black px-4 py-2 rounded-xl text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer active:scale-95 transition"
+                            >
+                              <RefreshCw className="w-4 h-4" /> إعادة تشغيل الكاميرا
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Instructions Strip */}
+                      <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-slate-300 pt-1">
+                        <span className="inline-flex items-center gap-1 text-emerald-400 font-bold">
+                          ✓ حضور الذهاب والعودة
+                        </span>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1 text-amber-400 font-bold">
+                          ✓ استلام التيشرت
+                        </span>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1 text-purple-400 font-bold">
+                          ✓ صرف الوجبة
+                        </span>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1 text-cyan-400 font-bold">
+                          ✓ مفتاح الغرفة
+                        </span>
+                      </div>
                     </div>
-
-                    <p className="text-[11px] text-slate-400">
-                      وجه الكاميرا نحو QR Code التذكرة لتأكيد الحضور واستلام التيشرت والوجبة فوراً
-                    </p>
                   </div>
                 </div>
               )}

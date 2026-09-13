@@ -309,5 +309,95 @@ table {
   }
 }
 
+/* High-Impact Cyber QR Scanner Animations */
+@keyframes cyberLaserSweep {
+  0% {
+    top: 6%;
+    opacity: 0.8;
+  }
+  50% {
+    top: 92%;
+    opacity: 1;
+  }
+  100% {
+    top: 6%;
+    opacity: 0.8;
+  }
+}
 
+@keyframes cyberTargetPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 1;
+  }
+}
 
+@keyframes cyberGlowSweep {
+  0%, 100% {
+    border-color: rgba(245, 158, 11, 0.7);
+    box-shadow: 0 0 25px rgba(245, 158, 11, 0.25), inset 0 0 20px rgba(245, 158, 11, 0.1);
+  }
+  50% {
+    border-color: rgba(16, 185, 129, 0.8);
+    box-shadow: 0 0 35px rgba(16, 185, 129, 0.35), inset 0 0 25px rgba(16, 185, 129, 0.15);
+  }
+}
+
+.cyber-laser-beam {
+  animation: cyberLaserSweep 2.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.cyber-target-frame {
+  animation: cyberTargetPulse 2.4s ease-in-out infinite;
+}
+
+.cyber-scanner-viewport {
+  animation: cyberGlowSweep 5s ease-in-out infinite;
+}
+
+@keyframes cyberRadarRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cyber-radar-sweep {
+  animation: cyberRadarRotate 4s linear infinite;
+}
+
+@keyframes cyberBorderNeon {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.cyber-neon-border {
+  background-size: 200% 200%;
+  animation: cyberBorderNeon 3s ease infinite;
+}
+
+.cyber-scanlines {
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.25) 50%
+  ), linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.03),
+    rgba(0, 255, 0, 0.01),
+    rgba(0, 0, 255, 0.03)
+  );
+  background-size: 100% 4px, 6px 100%;
+}

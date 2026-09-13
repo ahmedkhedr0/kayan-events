@@ -11,6 +11,8 @@ import {
   Trip,
   CompanyTreasury,
   TreasuryTransfer,
+  getStudentMealInfo,
+  getCompanionMealInfo,
 } from '../types';
 
 import {
@@ -455,11 +457,9 @@ export const generateWhatsAppTicketText = (
   if (apparelAddons.length === 0 && student.tshirtSize && student.tshirtSize !== 'none') {
     itemsList.push(`• تيشرت الفعالية: مقاس (${student.tshirtSize})${student.tshirtReceived ? ' (استلم ✅)' : ''}`);
   }
-  mealAddons.forEach((a) => {
-    itemsList.push(`• وجبة طعام: ${a.name}${student.mealReceived ? ' (استلمت ✅)' : ''}`);
-  });
-  if (mealAddons.length === 0 && student.hasMeal) {
-    itemsList.push(`• وجبة الغداء: ${student.mealOption || 'وجبة طعام VIP'}${student.mealReceived ? ' (استلمت ✅)' : ''}`);
+  const mealInfo = getStudentMealInfo(student, settings);
+  if (mealInfo.hasMeal) {
+    itemsList.push(`• وجبة طعام: ${mealInfo.mealName}${student.mealReceived ? ' (استلمت ✅)' : ''}`);
   }
   otherAddons.forEach((a) => {
     itemsList.push(`• خدمة إضافية: ${a.name}`);
@@ -467,6 +467,7 @@ export const generateWhatsAppTicketText = (
 
   const inclusionsSection = itemsList.length > 0 ? `\n✨ ═══ *الخدمات والإضافات المشمولة* ═══ ✨\n${itemsList.join('\n')}\n` : '';
 
+  const compMealInfo = getCompanionMealInfo(student, settings);
   const companionSection = student.hasCompanion && student.companionName ? `
 👥 ═══ *بطاقة وتفاصيل المرافق المنسق (تحت المشترك)* ═══ 👥
 • اسم المرافق: *${student.companionName}*
@@ -474,7 +475,7 @@ export const generateWhatsAppTicketText = (
 ${student.companionNationalId ? `• الرقم القومي للمرافق: *${student.companionNationalId}*\n` : ''}• مقعد المرافق بالحافلة: *${student.companionSeatNumber ? `#${student.companionSeatNumber}` : 'مجاور للمشترك الرئيسي'}*
 • سعر/قيمة تذكرة المرافق: *${(student.companionPrice ?? settings.ticketPrice ?? 0).toLocaleString()} ج.م*
 • تيشرت المرافق: *${student.companionTShirtSize === 'none' ? 'بدون' : student.companionTShirtSize || 'L'}${student.companionTshirtReceived ? ' (استلم ✅)' : ''}*
-• وجبة طعام المرافق: *${student.companionHasMeal ? `${student.companionMealOption || 'وجبة غداء VIP'}${student.companionMealReceived ? ' (استلم ✅)' : ''}` : 'بدون وجبة'}*
+• وجبة طعام المرافق: *${compMealInfo.hasMeal ? `${compMealInfo.mealName}${student.companionMealReceived ? ' (استلم ✅)' : ''}` : 'بدون وجبة'}*
 ` : '';
 
   if (templateType === 'receipt') {

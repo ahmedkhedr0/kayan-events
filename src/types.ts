@@ -21,6 +21,30 @@ export const PARTICIPANT_ROLES_CONFIG: Record<ParticipantRole, {
   staff: { label: 'طاقم عمل / خدمات لوجستية', badge: 'طاقم عمل', bg: 'bg-sky-500/20', text: 'text-sky-400', border: 'border-sky-500/40', icon: '🛠️' },
 };
 
+export type RoomType = 'single' | 'double' | 'triple' | 'quad' | 'suite';
+export type RoomGenderCategory = 'male' | 'female' | 'family' | 'mixed';
+
+export const ROOM_TYPE_CONFIG: Record<RoomType, { label: string; defaultCapacity: number; icon: string }> = {
+  single: { label: 'غرفة فردية (Single)', defaultCapacity: 1, icon: '🛏️' },
+  double: { label: 'غرفة ثنائية (Double)', defaultCapacity: 2, icon: '🛏️🛏️' },
+  triple: { label: 'غرفة ثلاثية (Triple)', defaultCapacity: 3, icon: '🛏️🛏️🛏️' },
+  quad: { label: 'غرفة رباعية (Quadruple)', defaultCapacity: 4, icon: '🛏️🛏️🛏️🛏️' },
+  suite: { label: 'جناح فندقي (Suite)', defaultCapacity: 5, icon: '👑' },
+};
+
+export interface HotelRoom {
+  id: string;
+  roomNumber: string; // e.g. "201"
+  hotelName?: string; // e.g. "فندق راديسون بلو"
+  floor?: string; // e.g. "الدور الثاني"
+  roomType: RoomType; // single, double, triple, quad, suite
+  capacity: number; // e.g. 2, 3, 4
+  genderCategory: RoomGenderCategory; // 'male' | 'female' | 'family' | 'mixed'
+  pricePerNight?: number;
+  notes?: string;
+  createdAt?: string;
+}
+
 export interface Student {
   id: string;
   ticketCode: string; // e.g. KYN-8921
@@ -58,6 +82,11 @@ export interface Student {
   nationalId?: string; // الرقم القومي (اختياري)
   emergencyPhone?: string; // رقم ولي الأمر / الطوارئ (اختياري)
   pickupPoint?: string; // نقطة التجمع المفضلة / المحطة (اختياري)
+  roomNumber?: string; // رقم الغرفة الفندقية
+  hotelName?: string; // اسم الفندق المسكن به
+  roomType?: RoomType; // نوع الغرفة المسكن بها
+  roomNotes?: string; // ملاحظات التسكين الخاصة
+  companionRoomNumber?: string; // غرفة المرافق إن اختلفت
   notes?: string;
   checkInDeparture: boolean; // التحرك من التجمع
   checkInReturn: boolean; // التحرك للعودة
@@ -66,6 +95,7 @@ export interface Student {
   mealOption?: string; // نوع الوجبة (اختياري)
   mealPrice?: number; // سعر الوجبة (اختياري)
   mealReceived?: boolean; // هل استلم الوجبة (تأكيد تسليم الوجبة)
+  keyReceived?: boolean; // هل استلم مفتاح الغرفة الفندقية
   departureTime?: string;
   returnTime?: string;
 }
@@ -396,6 +426,7 @@ export interface TripData {
   logistics: LogisticsItem[];
   timeline: TimelineEvent[];
   notices: BroadcastNotice[];
+  rooms?: HotelRoom[];
   settings: TripSettings;
 }
 
@@ -434,8 +465,10 @@ export type AppUserRole = 'admin' | 'field_supervisor' | 'pr_ticketing';
 
 export interface StaffPermissions {
   canScanQR: boolean; // ماسح الباركود
-  canCheckInOut: boolean; // كشف صعود ونزول الحافلة
+  canCheckInOut: boolean; // كشف صعود ونزول الحافلة (الذهاب والعودة)
   canDeliverItems: boolean; // تسليم التيشرت والوجبات
+  canManageRooms?: boolean; // تسكين الغرف الفندقية ومفاتيح الغرف
+  canCollectPayments?: boolean; // تحصيل المبالغ المتبقية في الميدان
   canRegisterStudents: boolean; // تسجيل وحجز طلاب جدد
   canIssueTickets: boolean; // إصدار ومشاركة التذاكر والواتساب
   canManageBuses: boolean; // توزيع المقاعد والحافلات
@@ -450,6 +483,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<AppUserRole, StaffPermissions> = {
     canScanQR: true,
     canCheckInOut: true,
     canDeliverItems: true,
+    canManageRooms: true,
+    canCollectPayments: true,
     canRegisterStudents: true,
     canIssueTickets: true,
     canManageBuses: true,
@@ -462,6 +497,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<AppUserRole, StaffPermissions> = {
     canScanQR: true,
     canCheckInOut: true,
     canDeliverItems: true,
+    canManageRooms: true,
+    canCollectPayments: true,
     canRegisterStudents: false,
     canIssueTickets: false,
     canManageBuses: false,
@@ -474,6 +511,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<AppUserRole, StaffPermissions> = {
     canScanQR: true,
     canCheckInOut: false,
     canDeliverItems: false,
+    canManageRooms: false,
+    canCollectPayments: true,
     canRegisterStudents: true,
     canIssueTickets: true,
     canManageBuses: false,
@@ -526,6 +565,8 @@ export type ActivityActionType =
   | 'tshirt_delivery'
   | 'deliver_meal'
   | 'meal_delivery'
+  | 'deliver_key'
+  | 'field_collect'
   | 'seat_change'
   | 'seat_transfer'
   | 'bus_transfer'
@@ -543,6 +584,8 @@ export type ActivityActionType =
   | 'receipt_add'
   | 'logistics_update'
   | 'staff_update'
+  | 'room_assign'
+  | 'room_update'
   | 'trip_create'
   | 'trip_switch'
   | 'trip_status_change'

@@ -293,6 +293,20 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
       category: 'field',
     },
     {
+      key: 'canManageRooms',
+      label: 'مفاتيح الغرف والتسكين الفندقي',
+      description: 'تسليم مفاتيح الغرف للنزلاء وتسكينهم ودليل الغرف',
+      icon: '🔑',
+      category: 'field',
+    },
+    {
+      key: 'canCollectPayments',
+      label: 'تحصيل المبالغ المتبقية والاشتراكات',
+      description: 'تحصيل باقي ثمن التذكرة كاش في الميدان وكشف المتبقي',
+      icon: '💵',
+      category: 'field',
+    },
+    {
       key: 'canRegisterStudents',
       label: 'تسجيل وحجز طلاب جدد',
       description: 'إضافة طلاب جدد وتعديل بيانات الاتصال والمرافقين',
@@ -609,6 +623,103 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
                   <span className="text-[10px] text-slate-400">
                     يمكنك تفعيل أو تعطيل أي أوبشن بشكل مستقل
                   </span>
+                </div>
+
+                {/* Quick Presets for Instant Configuration */}
+                <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                  <span className="text-[10px] text-slate-400 font-bold ml-1">تحديد سريع:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allOn: Record<string, boolean> = {};
+                      permissionOptions.forEach((p) => (allOn[p.key] = true));
+                      setFormPermissions(allOn as unknown as StaffPermissions);
+                    }}
+                    className="text-[11px] px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-bold transition active:scale-95 cursor-pointer"
+                  >
+                    ✓ الكل (جميع الصلاحيات)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormPermissions({
+                        canScanQR: true,
+                        canCheckInOut: true,
+                        canDeliverItems: false,
+                        canManageRooms: false,
+                        canCollectPayments: false,
+                        canRegisterStudents: false,
+                        canIssueTickets: false,
+                        canManageBuses: false,
+                        canViewFinancials: false,
+                        canAccessTreasury: false,
+                        canExportPrint: false,
+                        canEditSettings: false,
+                      });
+                    }}
+                    className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 font-bold transition active:scale-95 cursor-pointer"
+                  >
+                    🚌 الصعود والعودة فقط
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormPermissions({
+                        canScanQR: true,
+                        canCheckInOut: false,
+                        canDeliverItems: false,
+                        canManageRooms: true,
+                        canCollectPayments: false,
+                        canRegisterStudents: false,
+                        canIssueTickets: false,
+                        canManageBuses: false,
+                        canViewFinancials: false,
+                        canAccessTreasury: false,
+                        canExportPrint: false,
+                        canEditSettings: false,
+                      });
+                    }}
+                    className="text-[11px] px-2.5 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/30 font-bold transition active:scale-95 cursor-pointer"
+                  >
+                    🔑 المفاتيح والتسكين فقط
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormPermissions({
+                        canScanQR: false,
+                        canCheckInOut: false,
+                        canDeliverItems: false,
+                        canManageRooms: false,
+                        canCollectPayments: true,
+                        canRegisterStudents: false,
+                        canIssueTickets: false,
+                        canManageBuses: false,
+                        canViewFinancials: false,
+                        canAccessTreasury: false,
+                        canExportPrint: false,
+                        canEditSettings: false,
+                      });
+                    }}
+                    className="text-[11px] px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold transition active:scale-95 cursor-pointer"
+                  >
+                    💵 المبالغ المتبقية فقط
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allOff: Record<string, boolean> = {};
+                      permissionOptions.forEach((p) => (allOff[p.key] = false));
+                      setFormPermissions(allOff as unknown as StaffPermissions);
+                    }}
+                    className="text-[11px] px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 font-bold transition active:scale-95 cursor-pointer"
+                  >
+                    ✕ تفريغ الكل
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">

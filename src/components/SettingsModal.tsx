@@ -84,7 +84,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } else if (type === 'meal') {
       newAddon = {
         id: 'addon-meal-' + Date.now(),
-        name: 'وجبة غداء VIP (دجاج / كفتة)',
+        name: 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)',
         price: 200,
         type: 'meal',
         options: ['دجاج مشوي', 'كفتة مشوية', 'ميكس جريل'],

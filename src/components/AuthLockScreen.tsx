@@ -40,7 +40,7 @@ export const AuthLockScreen: React.FC<AuthLockScreenProps> = ({
   staffAccounts,
   tripName,
   destination: _destination,
-  supportPhone = '01023456789',
+  supportPhone = '01038574977',
   onAuthenticate,
   onBlockedAttempt,
   onInstallPWA,

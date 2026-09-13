@@ -83,7 +83,7 @@ const TRIP_PRESETS: TripPreset[] = [
     assemblyTime: '06:30 ص',
     addons: [
       { id: 'add-hoodie-1', name: 'هودي الفعالية والبراند المعتمد', price: 350, type: 'apparel', options: ['S', 'M', 'L', 'XL', '2XL', '3XL'], isDefaultSelected: true },
-      { id: 'add-meal-1', name: 'وجبة غداء VIP (دجاج مشوي / ميكس)', price: 200, type: 'meal', isDefaultSelected: true },
+      { id: 'add-meal-1', name: 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)', price: 200, type: 'meal', isDefaultSelected: true },
       { id: 'add-photo-1', name: 'جلسة تصوير وفوتوسيشن شاطئي احترافي', price: 150, type: 'service', isDefaultSelected: false },
     ],
   },
@@ -179,7 +179,7 @@ const AddonsBuilder: React.FC<AddonsBuilderProps> = ({ addons = [], onChange }) 
     } else if (type === 'meal') {
       newAddon = {
         id: 'addon-meal-' + Date.now(),
-        name: 'وجبة غداء VIP (دجاج / كفتة)',
+        name: 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)',
         price: 200,
         type: 'meal',
         options: ['دجاج مشوي', 'كفتة مشوية', 'ميكس جريل'],
@@ -572,7 +572,7 @@ export const TripSwitcherModal: React.FC<TripSwitcherModalProps> = ({
     whatsappGroupLink: 'https://chat.whatsapp.com/kayan-events',
     addons: [
       { id: 'addon-apparel-1', name: 'هودي الفعالية', price: 350, type: 'apparel' as AddonType, options: ['S', 'M', 'L', 'XL', '2XL', '3XL'], isDefaultSelected: true },
-      { id: 'addon-meal-1', name: 'وجبة غداء VIP (دجاج / كفتة)', price: 200, type: 'meal' as AddonType, isDefaultSelected: true },
+      { id: 'addon-meal-1', name: 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)', price: 200, type: 'meal' as AddonType, isDefaultSelected: true },
       { id: 'addon-service-1', name: 'جلسة تصوير وفوتوسيشن احترافي', price: 150, type: 'service' as AddonType, isDefaultSelected: false },
     ],
   });

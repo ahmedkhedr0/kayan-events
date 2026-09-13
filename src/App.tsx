@@ -10,6 +10,7 @@ import { ManifestsPrintCenter } from './components/ManifestsPrintCenter';
 import { EventTimeline } from './components/EventTimeline';
 import { StudentPortalMedia } from './components/StudentPortalMedia';
 import { FieldSupervisorView } from './components/FieldSupervisorView';
+import { RoomManagement } from './components/RoomManagement';
 
 import { QRScannerModal } from './components/QRScannerModal';
 import { StudentPassModal } from './components/StudentPassModal';
@@ -36,6 +37,8 @@ import {
   Trip,
   TripAddon,
   TripStatus,
+  HotelRoom,
+  RoomType,
   CompanyTreasury,
   TreasuryTransfer,
   StaffAccount,
@@ -87,7 +90,13 @@ export default function App() {
   // Staff & Role Security State
   const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>(loadStaffAccounts);
   const [userSession, setUserSession] = useState<ActiveUserSession>(loadActiveUserSession);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kayan_auth_locked') !== 'true';
+    } catch {
+      return true;
+    }
+  });
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(loadActivityLogs);
 
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -198,6 +207,9 @@ export default function App() {
 
   // Save session & accounts
   const handleUserLogin = (session: ActiveUserSession) => {
+    try {
+      localStorage.removeItem('kayan_auth_locked');
+    } catch {}
     setUserSession(session);
     saveActiveUserSession(session);
     setIsAuthenticated(true);
@@ -230,6 +242,9 @@ export default function App() {
   };
 
   const handleLockApp = () => {
+    try {
+      localStorage.setItem('kayan_auth_locked', 'true');
+    } catch {}
     addLog(
       'login',
       'قفل شاشة النظام / تأمين الحساب 🔒',
@@ -607,6 +622,68 @@ export default function App() {
     }
   };
 
+  const handleToggleKeyReceived = (studentId: string) => {
+    const student = activeTrip.students.find((s) => s.id === studentId);
+    const isNowReceived = !student?.keyReceived;
+    updateActiveTrip((prev) => ({
+      ...prev,
+      students: prev.students.map((s) =>
+        s.id === studentId
+          ? {
+              ...s,
+              keyReceived: !s.keyReceived,
+            }
+          : s
+      ),
+    }));
+    if (student) {
+      addLog(
+        'deliver_key',
+        isNowReceived ? 'تسليم مفتاح الغرفة الفندقية 🔑' : 'إلغاء تسليم مفتاح الغرفة',
+        isNowReceived
+          ? `تم تسليم مفتاح الغرفة رقم (${student.roomNumber || '-'}) للنزيل ${student.name}.`
+          : `تم إلغاء تأكيد تسليم مفتاح الغرفة لـ ${student.name}.`,
+        student.name,
+        student.id,
+        student.busNumber
+      );
+    }
+  };
+
+  const handleFieldCashCollection = (studentId: string, collectedAmount?: number) => {
+    const student = activeTrip.students.find((s) => s.id === studentId);
+    if (!student) return;
+    const amountToCollect = collectedAmount !== undefined ? collectedAmount : student.remainingAmount;
+    if (amountToCollect <= 0) return;
+
+    const newPaid = (student.paidAmount || 0) + amountToCollect;
+    const newRemaining = Math.max(0, (student.totalAmount || 0) - newPaid);
+    const newStatus = newRemaining === 0 ? 'paid' : 'deposit';
+
+    updateActiveTrip((prev) => ({
+      ...prev,
+      students: prev.students.map((s) =>
+        s.id === studentId
+          ? {
+              ...s,
+              paidAmount: newPaid,
+              remainingAmount: newRemaining,
+              paymentStatus: newStatus,
+            }
+          : s
+      ),
+    }));
+
+    addLog(
+      'field_collect',
+      'تحصيل مالي ميداني كاش 💵',
+      `قام المشرف الميداني بتحصيل مبلغ ${amountToCollect.toLocaleString()} ج.م من المشترك (${student.name}). الحالة الآن: ${newStatus === 'paid' ? 'خالص السداد' : `متبقي ${newRemaining.toLocaleString()} ج.م`}`,
+      student.name,
+      student.id,
+      student.busNumber
+    );
+  };
+
   // Scan Code Check-In Helper
   const handleCheckInByCode = (code: string) => {
     const student = activeTrip.students.find(
@@ -876,6 +953,230 @@ export default function App() {
     }));
   };
 
+  // Hotel Room Management Handlers
+  const handleAddRoom = (newRoomData: Omit<HotelRoom, 'id' | 'createdAt'>) => {
+    const newRoom: HotelRoom = {
+      ...newRoomData,
+      id: `room-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      createdAt: new Date().toISOString(),
+    };
+    updateActiveTrip((prev) => ({
+      ...prev,
+      rooms: [...(prev.rooms || []), newRoom],
+    }));
+    addLog(
+      'room_update',
+      'إضافة غرفة فندقية 🏨',
+      `تمت إضافة الغرفة رقم (${newRoom.roomNumber}) في (${newRoom.hotelName || 'الفندق'}) بسعة ${newRoom.capacity} أسِرّة.`,
+      newRoom.roomNumber,
+      newRoom.id
+    );
+  };
+
+  const handleBatchAddRooms = (newRoomsList: Omit<HotelRoom, 'id' | 'createdAt'>[]) => {
+    const timestamp = Date.now();
+    const createdRooms: HotelRoom[] = newRoomsList.map((r, idx) => ({
+      ...r,
+      id: `room-${timestamp}-${idx}`,
+      createdAt: new Date().toISOString(),
+    }));
+    updateActiveTrip((prev) => ({
+      ...prev,
+      rooms: [...(prev.rooms || []), ...createdRooms],
+    }));
+    addLog(
+      'room_update',
+      'إضافة دفعة غرف فندقية 🏢',
+      `تم إنشاء دفعة بعدد ${createdRooms.length} غرف فندقية متتابعة.`,
+      `غرف ${createdRooms[0]?.roomNumber} - ${createdRooms[createdRooms.length - 1]?.roomNumber}`
+    );
+  };
+
+  const handleUpdateRoom = (updatedRoom: HotelRoom) => {
+    updateActiveTrip((prev) => ({
+      ...prev,
+      rooms: (prev.rooms || []).map((r) => (r.id === updatedRoom.id ? updatedRoom : r)),
+    }));
+    addLog(
+      'room_update',
+      'تعديل بيانات غرفة 🏨',
+      `تم تحديث بيانات الغرفة رقم (${updatedRoom.roomNumber}).`,
+      updatedRoom.roomNumber,
+      updatedRoom.id
+    );
+  };
+
+  const handleDeleteRoom = (roomId: string) => {
+    const target = (activeTrip.rooms || []).find((r) => r.id === roomId);
+    updateActiveTrip((prev) => ({
+      ...prev,
+      rooms: (prev.rooms || []).filter((r) => r.id !== roomId),
+      students: target
+        ? prev.students.map((s) =>
+            s.roomNumber === target.roomNumber
+              ? { ...s, roomNumber: undefined, hotelName: undefined, roomType: undefined, roomNotes: undefined }
+              : s
+          )
+        : prev.students,
+    }));
+    if (target) {
+      addLog(
+        'room_update',
+        'حذف غرفة فندقية 🗑️',
+        `تم حذف الغرفة رقم (${target.roomNumber}) وإلغاء تسكين النزلاء بها.`,
+        target.roomNumber
+      );
+    }
+  };
+
+  const handleAssignStudentToRoom = (
+    studentId: string,
+    roomNumber: string,
+    hotelName?: string,
+    roomType?: RoomType
+  ) => {
+    const targetStudent = activeTrip.students.find((s) => s.id === studentId);
+    updateActiveTrip((prev) => ({
+      ...prev,
+      students: prev.students.map((s) =>
+        s.id === studentId
+          ? { ...s, roomNumber, hotelName: hotelName || s.hotelName, roomType: roomType || s.roomType }
+          : s
+      ),
+    }));
+    if (targetStudent) {
+      addLog(
+        'room_assign',
+        'تسكين نزيل في غرفة 🛏️',
+        `تم تسكين المشترك (${targetStudent.name}) في الغرفة رقم (${roomNumber}).`,
+        targetStudent.name,
+        targetStudent.id
+      );
+    }
+  };
+
+  const handleRemoveStudentFromRoom = (studentId: string) => {
+    const targetStudent = activeTrip.students.find((s) => s.id === studentId);
+    updateActiveTrip((prev) => ({
+      ...prev,
+      students: prev.students.map((s) =>
+        s.id === studentId
+          ? { ...s, roomNumber: undefined, hotelName: undefined, roomType: undefined, roomNotes: undefined }
+          : s
+      ),
+    }));
+    if (targetStudent) {
+      addLog(
+        'room_assign',
+        'إلغاء تسكين نزيل',
+        `تم إخلاء وإلغاء تسكين المشترك (${targetStudent.name}) من الغرفة.`,
+        targetStudent.name
+      );
+    }
+  };
+
+  const handleClearAllRoomAssignments = () => {
+    updateActiveTrip((prev) => ({
+      ...prev,
+      students: prev.students.map((s) => ({
+        ...s,
+        roomNumber: undefined,
+        hotelName: undefined,
+        roomType: undefined,
+        roomNotes: undefined,
+      })),
+    }));
+    addLog(
+      'room_update',
+      'تفريغ تسكينات الغرف',
+      'تم تفريغ كافة تسكينات الغرف لجميع المشتركين.'
+    );
+  };
+
+  const handleAutoAssignRooms = () => {
+    const availableRooms = [...(activeTrip.rooms || [])];
+    if (availableRooms.length === 0) {
+      alert('يرجى إضافة غرف فندقية أولاً لتتمكن من استخدام التسكين التلقائي.');
+      return;
+    }
+
+    const currentStudents = [...activeTrip.students];
+    const unassigned = currentStudents.filter((s) => !s.roomNumber || String(s.roomNumber).trim() === '');
+    if (unassigned.length === 0) {
+      alert('جميع المشاركين مسكنون بالفعل!');
+      return;
+    }
+
+    // Track occupants per room
+    const roomCounts = new Map<string, number>();
+    availableRooms.forEach((r) => {
+      const existingOccs = currentStudents.filter((s) => s.roomNumber === r.roomNumber).length;
+      roomCounts.set(r.roomNumber, existingOccs);
+    });
+
+    const updatedStudents = [...currentStudents];
+    let assignedCount = 0;
+
+    // Group unassigned by gender
+    const males = unassigned.filter((s) => s.gender === 'male');
+    const females = unassigned.filter((s) => s.gender === 'female');
+
+    // Assign males to male rooms or family/mixed
+    const maleRooms = availableRooms.filter((r) => r.genderCategory === 'male' || r.genderCategory === 'mixed');
+    for (const male of males) {
+      for (const room of maleRooms) {
+        const count = roomCounts.get(room.roomNumber) || 0;
+        if (count < room.capacity) {
+          const idx = updatedStudents.findIndex((s) => s.id === male.id);
+          if (idx !== -1) {
+            updatedStudents[idx] = {
+              ...updatedStudents[idx],
+              roomNumber: room.roomNumber,
+              hotelName: room.hotelName,
+              roomType: room.roomType,
+            };
+            roomCounts.set(room.roomNumber, count + 1);
+            assignedCount++;
+            break;
+          }
+        }
+      }
+    }
+
+    // Assign females to female rooms or family/mixed
+    const femaleRooms = availableRooms.filter((r) => r.genderCategory === 'female' || r.genderCategory === 'mixed');
+    for (const female of females) {
+      for (const room of femaleRooms) {
+        const count = roomCounts.get(room.roomNumber) || 0;
+        if (count < room.capacity) {
+          const idx = updatedStudents.findIndex((s) => s.id === female.id);
+          if (idx !== -1) {
+            updatedStudents[idx] = {
+              ...updatedStudents[idx],
+              roomNumber: room.roomNumber,
+              hotelName: room.hotelName,
+              roomType: room.roomType,
+            };
+            roomCounts.set(room.roomNumber, count + 1);
+            assignedCount++;
+            break;
+          }
+        }
+      }
+    }
+
+    updateActiveTrip((prev) => ({
+      ...prev,
+      students: updatedStudents,
+    }));
+
+    addLog(
+      'room_assign',
+      'تسكين تلقائي ذكي 🪄',
+      `تم تسكين ${assignedCount} مشارك تلقائياً في الغرف مع مراعاة فصل الشباب عن البنات.`
+    );
+  };
+
   // Multi-Trip Management Handlers
   const handleSelectTrip = (tripId: string) => {
     setActiveTripId(tripId);
@@ -1141,6 +1442,8 @@ export default function App() {
           students={activeTrip.students}
           tripSettings={activeTrip.settings}
           session={userSession}
+          drivers={activeTrip.drivers}
+          rooms={activeTrip.rooms || []}
           onOpenQRScanner={() => setIsQRScannerOpen(true)}
           onLogoutToStaffModal={() => setIsStaffLoginOpen(true)}
           onOpenTripSwitcher={() => setIsTripSwitcherOpen(true)}
@@ -1148,6 +1451,11 @@ export default function App() {
           onToggleCheckInReturn={handleToggleCheckInReturn}
           onToggleTShirtReceived={handleToggleTShirtReceived}
           onToggleMealReceived={handleToggleMealReceived}
+          onToggleKeyReceived={handleToggleKeyReceived}
+          onFieldCashCollection={handleFieldCashCollection}
+          onOpenTicketPassModal={(student) => setSelectedStudentForPass(student)}
+          onAssignStudentToRoom={handleAssignStudentToRoom}
+          onRemoveStudentFromRoom={handleRemoveStudentFromRoom}
         />
       ) : (
         <>
@@ -1236,7 +1544,30 @@ export default function App() {
             onToggleTShirtReceived={handleToggleTShirtReceived}
             onToggleCheckInDeparture={handleToggleCheckInDeparture}
             onToggleCheckInReturn={handleToggleCheckInReturn}
+            onToggleKeyReceived={handleToggleKeyReceived}
             onNavigateTab={(tab) => setActiveTab(tab)}
+          />
+        )}
+
+        {activeTab === 'field_supervisor' && (
+          <FieldSupervisorView
+            students={activeTrip.students}
+            tripSettings={activeTrip.settings}
+            session={userSession}
+            drivers={activeTrip.drivers}
+            rooms={activeTrip.rooms || []}
+            onOpenQRScanner={() => setIsQRScannerOpen(true)}
+            onLogoutToStaffModal={() => setIsStaffLoginOpen(true)}
+            onOpenTripSwitcher={() => setIsTripSwitcherOpen(true)}
+            onToggleCheckInDeparture={handleToggleCheckInDeparture}
+            onToggleCheckInReturn={handleToggleCheckInReturn}
+            onToggleTShirtReceived={handleToggleTShirtReceived}
+            onToggleMealReceived={handleToggleMealReceived}
+            onToggleKeyReceived={handleToggleKeyReceived}
+            onFieldCashCollection={handleFieldCashCollection}
+            onOpenTicketPassModal={(student) => setSelectedStudentForPass(student)}
+            onAssignStudentToRoom={handleAssignStudentToRoom}
+            onRemoveStudentFromRoom={handleRemoveStudentFromRoom}
           />
         )}
 
@@ -1263,6 +1594,23 @@ export default function App() {
             onUpdateStudent={handleUpdateStudent}
             onAddReceipt={handleAddReceipt}
             onNavigateTab={(tab) => setActiveTab(tab)}
+          />
+        )}
+
+        {activeTab === 'rooms' && (
+          <RoomManagement
+            rooms={activeTrip.rooms || []}
+            students={activeTrip.students}
+            settings={activeTrip.settings}
+            onAddRoom={handleAddRoom}
+            onBatchAddRooms={handleBatchAddRooms}
+            onUpdateRoom={handleUpdateRoom}
+            onDeleteRoom={handleDeleteRoom}
+            onAssignStudentToRoom={handleAssignStudentToRoom}
+            onRemoveStudentFromRoom={handleRemoveStudentFromRoom}
+            onClearAllRoomAssignments={handleClearAllRoomAssignments}
+            onAutoAssignRooms={handleAutoAssignRooms}
+            onOpenTicketPassModal={(student) => setSelectedStudentForPass(student)}
           />
         )}
 
@@ -1372,12 +1720,16 @@ export default function App() {
         isOpen={isQRScannerOpen}
         onClose={() => setIsQRScannerOpen(false)}
         students={activeTrip.students}
+        settings={activeTrip.settings}
         userSession={userSession}
         onUpdateStudent={handleUpdateStudent}
         onToggleCheckInDeparture={handleToggleCheckInDeparture}
         onToggleCheckInReturn={handleToggleCheckInReturn}
         onToggleTShirtReceived={handleToggleTShirtReceived}
         onToggleMealReceived={handleToggleMealReceived}
+        onToggleKeyReceived={handleToggleKeyReceived}
+        onAssignStudentToRoom={handleAssignStudentToRoom}
+        rooms={activeTrip.rooms || []}
         onOpenDigitalTicket={(student) => setSelectedStudentForPass(student)}
         onCheckInStudentByCode={handleCheckInByCode}
       />

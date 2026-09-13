@@ -314,6 +314,34 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
                 </div>
               </div>
 
+              {/* Hotel Room & Accommodation (if student is assigned to a room) */}
+              {student.roomNumber && (
+                <div className="bg-indigo-950/70 border border-indigo-500/40 rounded-xl p-2.5 flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base shrink-0">🏨</span>
+                    <div>
+                      <span className="text-[10px] text-slate-400 block font-medium">الإقامة والغرفة الفندقية:</span>
+                      <strong className="text-white text-xs sm:text-sm font-black block mt-0.5">
+                        غرفة ({student.roomNumber}) {student.hotelName ? `• ${student.hotelName}` : ''}
+                      </strong>
+                    </div>
+                  </div>
+                  {student.roomType && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-md font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                      {student.roomType === 'single'
+                        ? 'فردية 🛏️'
+                        : student.roomType === 'double'
+                        ? 'ثنائية 🛏️🛏️'
+                        : student.roomType === 'triple'
+                        ? 'ثلاثية 🛏️🛏️🛏️'
+                        : student.roomType === 'quad'
+                        ? 'رباعية 🛏️🛏️🛏️🛏️'
+                        : 'جناح فندقي 👑'}
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* Dynamic Addons / Inclusions Display: ONLY shown if the student actually selected addons */}
               {(() => {
                 const userSelectedAddons = (settings.addons || []).filter((a) => (student.selectedAddonIds || []).includes(a.id));
@@ -412,7 +440,7 @@ export const DigitalTicketCard: React.FC<DigitalTicketCardProps> = ({
                             <span className="text-base">🍔</span>
                             <div>
                               <span className="text-[10px] text-slate-400 block font-medium">وجبة الغداء:</span>
-                              <strong className="text-amber-300 font-black text-xs">{student.mealOption || 'وجبة طعام VIP'}</strong>
+                              <strong className="text-amber-300 font-black text-xs">{getStudentMealInfo(student, settings).mealName}</strong>
                             </div>
                           </div>
                           <span className="bg-amber-500/20 text-amber-300 border border-amber-500/50 text-[10px] px-2 py-0.5 rounded-md font-bold">

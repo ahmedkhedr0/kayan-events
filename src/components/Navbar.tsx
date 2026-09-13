@@ -28,6 +28,8 @@ import {
   LogOut,
   Lock,
   Activity,
+  Crown,
+  BedDouble,
 } from 'lucide-react';
 import { TripSettings, ActiveUserSession } from '../types';
 
@@ -93,6 +95,13 @@ export const Navbar: React.FC<NavbarProps> = ({
       visible: Boolean(perms?.canManageBuses || perms?.canCheckInOut || isAdmin),
     },
     {
+      id: 'rooms',
+      label: 'تسكين وإدارة الغرف الفندقية',
+      shortLabel: 'الغرف 🏨',
+      icon: BedDouble,
+      visible: Boolean(perms?.canManageRooms ?? true),
+    },
+    {
       id: 'manifests',
       label: 'الكشوفات والطباعة المعتمدة',
       shortLabel: 'الكشوفات 🖨️',
@@ -129,10 +138,11 @@ export const Navbar: React.FC<NavbarProps> = ({
     <>
       <header className="sticky top-0 z-40 bg-slate-950/95 backdrop-blur-md border-b border-slate-800/80 shadow-xl">
         {/* Top Announcement Bar - Clean single-row layout on mobile */}
-        <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-indigo-700 text-slate-950 text-[11px] sm:text-xs py-1.5 px-3 sm:px-4 font-bold flex justify-between items-center gap-2">
+        <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-indigo-700 text-slate-950 text-[11px] sm:text-xs py-1 px-2.5 sm:px-4 font-bold flex justify-between items-center gap-2">
           {/* Trip Selector Trigger */}
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className="bg-slate-950 text-amber-400 px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] uppercase font-black tracking-wider shrink-0 shadow-sm">
+            <span className="bg-slate-950 text-amber-300 border border-amber-400/40 px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] uppercase font-black tracking-wider shrink-0 shadow-sm flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
               KAYAN
             </span>
             <button
@@ -141,7 +151,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               title="انقر لتبديل الرحلة الحالية"
             >
               <Compass className="w-3.5 h-3.5 shrink-0 text-slate-950" />
-              <span className="truncate max-w-[130px] xs:max-w-[170px] sm:max-w-[260px] md:max-w-[340px] font-black">
+              <span className="truncate max-w-[130px] xs:max-w-[170px] sm:max-w-[260px] md:max-w-[360px] font-black">
                 {tripSettings.tripName}
               </span>
               <span className="bg-slate-950/20 px-1.5 py-0.2 text-[9px] rounded font-mono shrink-0 hidden sm:inline">
@@ -151,18 +161,22 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* User Session & Status Badges */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            {/* Active User Status Button */}
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+            {/* Active User Status Button - Refined Compact Luxury Badge */}
             <button
               onClick={onOpenStaffLogin}
-              className="bg-slate-950/95 hover:bg-slate-900 text-amber-300 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full text-[10px] sm:text-[11px] flex items-center gap-1 font-extrabold transition shadow-md active:scale-95 cursor-pointer border border-slate-800 shrink-0"
+              className="bg-slate-950/95 hover:bg-slate-900 text-amber-300 px-2 py-0.5 sm:px-2.5 sm:py-0.5 rounded-full text-[9.5px] sm:text-[11px] flex items-center gap-1 font-bold transition shadow-sm active:scale-95 cursor-pointer border border-amber-500/40 shrink-0"
               title="تبديل حساب المستخدم أو رمز الدخول السريع"
             >
-              <ShieldCheck className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400 shrink-0" />
-              <span className="text-white font-black truncate max-w-[70px] xs:max-w-[110px] sm:max-w-[140px]">
-                {userSession.name}
+              {userSession.role === 'admin' ? (
+                <Crown className="w-3 h-3 text-amber-400 shrink-0" />
+              ) : (
+                <ShieldCheck className="w-3 h-3 text-amber-400 shrink-0" />
+              )}
+              <span className="text-amber-100 font-bold truncate max-w-[55px] xs:max-w-[85px] sm:max-w-[130px]">
+                {userSession.name.replace(/\s*\(.*?\)\s*/g, '').trim() || userSession.name}
               </span>
-              <span className="text-[8px] sm:text-[9px] bg-amber-500 text-slate-950 font-black px-1 sm:px-1.5 py-0.2 rounded font-mono shrink-0">
+              <span className="text-[7.5px] sm:text-[9px] bg-amber-500/25 text-amber-300 border border-amber-500/50 font-bold px-1.5 py-0.2 rounded-full font-mono shrink-0">
                 {userSession.role === 'admin' ? 'أدمن' : userSession.role === 'field_supervisor' ? 'مشرف' : 'موظف'}
               </span>
             </button>
@@ -194,78 +208,85 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Main Bar */}
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2 sm:py-3 flex items-center justify-between gap-2 sm:gap-4">
-          {/* Brand Logo */}
+        <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 py-2 sm:py-2.5 flex items-center justify-between gap-1.5 sm:gap-4">
+          {/* Brand Logo & Name */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-indigo-600 to-amber-500 p-0.5 shadow-lg shadow-indigo-500/20 shrink-0">
-              <div className="w-full h-full bg-slate-900 rounded-[10px] flex items-center justify-center font-black text-amber-400 text-base sm:text-xl tracking-tighter">
-                K
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-amber-500 via-amber-400 to-indigo-600 p-0.5 shadow-md shadow-amber-500/20 shrink-0">
+              <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center font-black text-amber-400 text-[10px] sm:text-xs tracking-wider">
+                KAYAN
               </div>
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <h1 className="text-sm sm:text-xl font-extrabold text-white tracking-wide truncate">
-                  كيان <span className="text-amber-400">EVENTS</span>
+              <div className="flex items-center gap-1 sm:gap-2">
+                <h1 className="text-xs sm:text-lg font-black text-white tracking-wide truncate">
+                  <span className="text-amber-400">KAYAN</span> <span className="text-slate-100 font-bold">EVENTS</span>
                 </h1>
+                <span
+                  className="inline-flex items-center gap-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[8px] sm:text-[9.5px] px-1.5 py-0.2 rounded-full font-bold shrink-0"
+                  title="المزامنة المباشرة على كافة الأجهزة مفعّلة"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="hidden xs:inline">مباشر</span>
+                </span>
                 <button
                   onClick={onOpenTripSwitcher}
-                  className="bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[9px] sm:text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 transition active:scale-95 cursor-pointer shrink-0"
+                  className="bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[8.5px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full font-bold flex items-center gap-1 transition active:scale-95 cursor-pointer shrink-0"
                 >
                   <Layers className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                   <span>الرحلات</span>
                 </button>
               </div>
-              <p className="text-[10px] sm:text-[11px] text-slate-400 hidden sm:block truncate max-w-xs">
+              <p className="text-[9.5px] sm:text-[11px] text-slate-400 hidden sm:block truncate max-w-xs">
                 {tripSettings.destination || 'الوجهة المحددة'}
               </p>
             </div>
           </div>
 
-          {/* Header Actions */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Staff Passcodes & Multi-options Manager Button (Admin only) */}
+          {/* Header Actions - Perfectly compact on mobile and rich on desktop */}
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+            {/* Staff Passcodes & Permissions Manager Button (Admin only) - Compact & Elegant */}
             {isAdmin && (
-              <>
-                <button
-                  onClick={onOpenStaffManagement}
-                  className="bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-300 font-bold p-1.5 sm:px-3 sm:py-2 rounded-xl text-xs sm:text-sm hidden sm:flex items-center gap-1.5 transition border border-slate-800 active:scale-95 cursor-pointer"
-                  title="إدارة الموظفين وتحديد خياراتهم المتعددة وأرقام PIN السرية"
-                >
-                  <KeyRound className="w-4 h-4 text-amber-400" />
-                  <span className="hidden lg:inline">صلاحيات الموظفين</span>
-                </button>
+              <button
+                onClick={onOpenStaffManagement}
+                className="bg-slate-900 hover:bg-slate-800 text-amber-400 hover:text-amber-300 font-bold p-1.5 sm:px-2.5 sm:py-1.5 md:px-3 md:py-2 rounded-xl text-xs flex items-center gap-1.5 transition border border-amber-500/30 active:scale-95 cursor-pointer shrink-0 shadow-sm"
+                title="إدارة الموظفين وتحديد خياراتهم المتعددة وأرقام PIN السرية"
+              >
+                <KeyRound className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
+                <span className="hidden lg:inline">صلاحيات الموظفين</span>
+                <span className="hidden md:inline lg:hidden">الصلاحيات</span>
+              </button>
+            )}
 
-                {onOpenActivityLogs && (
-                  <button
-                    onClick={onOpenActivityLogs}
-                    className="bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 font-bold p-1.5 sm:px-3 sm:py-2 rounded-xl text-xs sm:text-sm hidden md:flex items-center gap-1.5 transition border border-slate-800 active:scale-95 cursor-pointer"
-                    title="سجل نشاط وحركات الموظفين المتطور (Audit Logs)"
-                  >
-                    <Activity className="w-4 h-4 text-emerald-400" />
-                    <span className="hidden xl:inline">سجل النشاط ⚡</span>
-                  </button>
-                )}
-              </>
+            {/* Activity Logs & Live Audit Trail Button */}
+            {onOpenActivityLogs && (
+              <button
+                onClick={onOpenActivityLogs}
+                className="bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 font-bold p-1.5 sm:px-2.5 sm:py-1.5 md:px-3 md:py-2 rounded-xl text-xs flex items-center gap-1.5 transition border border-slate-800 active:scale-95 cursor-pointer shrink-0 shadow-sm"
+                title="سجل نشاط وحركات الموظفين المتطور (Audit Logs)"
+              >
+                <Activity className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400 shrink-0" />
+                <span className="hidden md:inline">سجل النشاط ⚡</span>
+              </button>
             )}
 
             {(perms?.canAccessTreasury || isAdmin) && (
               <button
                 onClick={onOpenTreasuryModal}
-                className="bg-indigo-950 hover:bg-indigo-900 text-amber-300 font-bold p-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs sm:text-sm flex items-center gap-1.5 transition border border-indigo-700/60 active:scale-95 cursor-pointer"
+                className="bg-indigo-950/90 hover:bg-indigo-900 text-amber-300 font-bold p-1.5 sm:px-2.5 sm:py-1.5 md:px-3 md:py-2 rounded-xl text-xs flex items-center gap-1.5 transition border border-indigo-700/60 active:scale-95 cursor-pointer shrink-0 shadow-sm"
                 title="الخزنة الرئيسية"
               >
-                <Landmark className="w-4 h-4 text-amber-400" />
-                <span className="hidden sm:inline font-bold">الخزنة</span>
+                <Landmark className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
+                <span className="hidden md:inline font-bold">الخزنة</span>
               </button>
             )}
 
             {(perms?.canScanQR || isAdmin) && (
               <button
                 onClick={onOpenQRScanner}
-                className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm flex items-center gap-1.5 transition shadow-lg shadow-amber-500/20 active:scale-95 cursor-pointer"
+                className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-2 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs flex items-center gap-1.5 transition shadow-md shadow-amber-500/20 active:scale-95 cursor-pointer shrink-0"
                 title="مسح كود QR لتحضير الطلاب"
               >
-                <QrCode className="w-4 h-4 shrink-0" />
+                <QrCode className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
                 <span className="hidden xs:inline font-black">مسح QR</span>
               </button>
             )}
@@ -273,31 +294,31 @@ export const Navbar: React.FC<NavbarProps> = ({
             {(perms?.canIssueTickets || isAdmin) && (
               <button
                 onClick={onOpenStudentPass}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold p-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs sm:text-sm hidden sm:flex items-center gap-1.5 transition border border-indigo-400/30 active:scale-95 cursor-pointer"
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold p-1.5 sm:px-2.5 sm:py-1.5 md:px-3 md:py-2 rounded-xl text-xs hidden sm:flex items-center gap-1.5 transition border border-indigo-400/30 active:scale-95 cursor-pointer shrink-0"
                 title="تذكرة الطالب الرقمية"
               >
-                <Sparkles className="w-4 h-4 text-amber-300" />
-                <span className="hidden md:inline">التذكرة</span>
+                <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-300 shrink-0" />
+                <span className="hidden lg:inline">التذكرة</span>
               </button>
             )}
 
             {(perms?.canEditSettings || isAdmin) && (
               <button
                 onClick={onOpenSettings}
-                className="p-1.5 sm:p-2 text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 rounded-xl border border-slate-800 transition active:scale-95 cursor-pointer"
+                className="p-1.5 sm:p-2 text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 rounded-xl border border-slate-800 transition active:scale-95 cursor-pointer shrink-0"
                 title="إعدادات الرحلة"
               >
-                <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
+                <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
             )}
 
             {/* Mobile Menu Drawer Toggle */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="p-1.5 sm:p-2 text-slate-300 hover:text-white bg-slate-900 rounded-xl border border-slate-800 transition md:hidden active:scale-95 cursor-pointer"
+              className="p-1.5 sm:p-2 text-slate-300 hover:text-white bg-slate-900 rounded-xl border border-slate-800 transition md:hidden active:scale-95 cursor-pointer shrink-0"
               aria-label="القائمة"
             >
-              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              {isMobileMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
             </button>
           </div>
         </div>
@@ -366,6 +387,28 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
 
             <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-xs flex-wrap gap-2">
+              {isAdmin && (
+                <button
+                  onClick={() => {
+                    onOpenStaffManagement();
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="text-amber-400 hover:underline flex items-center gap-1 py-1 font-bold cursor-pointer"
+                >
+                  <KeyRound className="w-3.5 h-3.5" /> صلاحيات الموظفين 🔑
+                </button>
+              )}
+              {onOpenActivityLogs && (
+                <button
+                  onClick={() => {
+                    onOpenActivityLogs();
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="text-emerald-400 hover:underline flex items-center gap-1 py-1 font-bold cursor-pointer"
+                >
+                  <Activity className="w-3.5 h-3.5" /> سجل النشاط ⚡
+                </button>
+              )}
               <button
                 onClick={() => {
                   onOpenStaffLogin();
@@ -373,7 +416,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 }}
                 className="text-amber-400 hover:underline flex items-center gap-1 py-1 font-bold"
               >
-                <ShieldCheck className="w-3.5 h-3.5" /> تسجيل دخول موظف (PIN)
+                <ShieldCheck className="w-3.5 h-3.5" /> تسجيل دخول (PIN)
               </button>
               {onLockApp && (
                 <button

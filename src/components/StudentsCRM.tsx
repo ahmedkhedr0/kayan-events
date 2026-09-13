@@ -36,6 +36,8 @@ import {
   Receipt,
   Image as ImageIcon,
   CreditCard,
+  Building,
+  Key,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Student, PaymentStatus, PaymentMethod, TShirtSize, Gender, ParticipantRole, PARTICIPANT_ROLES_CONFIG, TripSettings, TripAddon, getStudentMealInfo, isApparelAddon, isMealAddon, ActiveUserSession, ReceiptVoucher } from '../types';
@@ -56,6 +58,7 @@ interface StudentsCRMProps {
   onOpenTicketPassModal: (student: Student) => void;
   onToggleMealReceived?: (studentId: string) => void;
   onToggleTShirtReceived?: (studentId: string) => void;
+  onToggleKeyReceived?: (studentId: string) => void;
   onToggleCheckInDeparture?: (studentId: string) => void;
   onToggleCheckInReturn?: (studentId: string) => void;
   onNavigateTab?: (tab: string) => void;
@@ -73,6 +76,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
   onOpenTicketPassModal,
   onToggleMealReceived,
   onToggleTShirtReceived,
+  onToggleKeyReceived,
   onToggleCheckInDeparture,
   onToggleCheckInReturn,
   onNavigateTab,
@@ -102,6 +106,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<ParticipantRole | 'all'>('all');
   const [selectedAttendanceFilter, setSelectedAttendanceFilter] = useState<'all' | 'departure_checked' | 'departure_absent' | 'return_checked' | 'return_absent' | 'full_attendance'>('all');
   const [selectedMealFilter, setSelectedMealFilter] = useState<'all' | 'has_meal' | 'meal_received' | 'meal_pending' | 'no_meal' | 'tshirt_received' | 'tshirt_pending'>('all');
+  const [selectedRoomFilter, setSelectedRoomFilter] = useState<'all' | 'assigned' | 'key_received' | 'key_pending' | 'unassigned'>('all');
 
   // Modal State for Add / Edit Student
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -152,7 +157,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
     companionSeatNumber: undefined as number | undefined,
     companionTShirtSize: 'L' as TShirtSize,
     companionHasMeal: false,
-    companionMealOption: 'وجبة غداء VIP (دجاج / كفتة)',
+    companionMealOption: 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)',
     companionPrice: settings.ticketPrice as number | undefined,
     busNumber: 1,
     seatNumber: undefined as number | undefined,
@@ -166,7 +171,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
     pickupPoint: '',
     notes: '',
     hasMeal: false,
-    mealOption: 'وجبة غداء VIP (دجاج / كفتة)',
+    mealOption: 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)',
     mealPrice: 150,
     mealReceived: false,
     tshirtReceived: false,
@@ -285,7 +290,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
       companionSeatNumber: initialSeat + 1 <= 50 ? initialSeat + 1 : undefined,
       companionTShirtSize: 'L',
       companionHasMeal: false,
-      companionMealOption: 'وجبة غداء VIP (دجاج / كفتة)',
+      companionMealOption: mealAddon ? mealAddon.name : 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)',
       companionPrice: settings.companionFullPrice ?? settings.ticketPrice,
       companionSelectedAddonIds: defaultAddonIds,
       busNumber: initialBus,
@@ -300,7 +305,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
       pickupPoint: '',
       notes: '',
       hasMeal: hasMealDefault,
-      mealOption: hasMealDefault ? 'وجبة غداء VIP (دجاج / كفتة)' : '',
+      mealOption: hasMealDefault ? (mealAddon ? mealAddon.name : 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)') : '',
       mealPrice: mealAddon ? Number(mealAddon.price) : 150,
       mealReceived: false,
       tshirtReceived: false,
@@ -314,6 +319,25 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
     setEditingStudent(student);
     setAutoSendWhatsAppOnSave(false);
     const defaultAddonIds = (settings.addons || []).filter((a) => a.isDefaultSelected).map((a) => a.id);
+    const activeMealAddon = (settings.addons || []).find((a) => isMealAddon(a));
+    const fallbackMealName = activeMealAddon ? activeMealAddon.name : 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)';
+
+    const isLegacyMeal = (val?: string) =>
+      Boolean(val && (
+        val.includes('دجاج / كفتة') ||
+        val.includes('دجاج وكفته') ||
+        val.includes('دجاج وكفتة') ||
+        val.includes('دجاج مشوي / ميكس')
+      ));
+
+    const resolvedMealOption = isLegacyMeal(student.mealOption)
+      ? fallbackMealName
+      : (student.mealOption || (student.hasMeal ? fallbackMealName : ''));
+
+    const resolvedCompanionMealOption = isLegacyMeal(student.companionMealOption)
+      ? fallbackMealName
+      : (student.companionMealOption || fallbackMealName);
+
     setFormData({
       name: student.name,
       phone: student.phone,
@@ -332,7 +356,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
       companionSeatNumber: student.companionSeatNumber,
       companionTShirtSize: student.companionTShirtSize || 'L',
       companionHasMeal: student.companionHasMeal || false,
-      companionMealOption: student.companionMealOption || 'وجبة غداء VIP (دجاج / كفتة)',
+      companionMealOption: resolvedCompanionMealOption,
       companionPrice: student.companionPrice !== undefined ? student.companionPrice : (settings.companionFullPrice ?? settings.ticketPrice),
       companionSelectedAddonIds: student.companionSelectedAddonIds || defaultAddonIds,
       companionAddonOptions: student.companionAddonOptions || {},
@@ -348,7 +372,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
       pickupPoint: student.pickupPoint || '',
       notes: student.notes || '',
       hasMeal: student.hasMeal || false,
-      mealOption: student.mealOption || '',
+      mealOption: resolvedMealOption,
       mealPrice: student.mealPrice || 150,
       mealReceived: student.mealReceived || false,
       tshirtReceived: student.tshirtReceived || false,
@@ -429,9 +453,16 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
       else if (selectedMealFilter === 'tshirt_received') matchMeal = !!student.tshirtReceived;
       else if (selectedMealFilter === 'tshirt_pending') matchMeal = !student.tshirtReceived;
 
-      return matchQuery && matchBus && matchStatus && matchGender && matchRole && matchAttendance && matchMeal;
+      let matchRoom = true;
+      const hasRoom = Boolean(student.roomNumber && student.roomNumber.trim() !== '');
+      if (selectedRoomFilter === 'assigned') matchRoom = hasRoom;
+      else if (selectedRoomFilter === 'key_received') matchRoom = hasRoom && !!student.keyReceived;
+      else if (selectedRoomFilter === 'key_pending') matchRoom = hasRoom && !student.keyReceived;
+      else if (selectedRoomFilter === 'unassigned') matchRoom = !hasRoom;
+
+      return matchQuery && matchBus && matchStatus && matchGender && matchRole && matchAttendance && matchMeal && matchRoom;
     });
-  }, [visibleStudents, searchTerm, selectedBusFilter, selectedStatusFilter, selectedGenderFilter, selectedRoleFilter, selectedAttendanceFilter, selectedMealFilter, settings]);
+  }, [visibleStudents, searchTerm, selectedBusFilter, selectedStatusFilter, selectedGenderFilter, selectedRoleFilter, selectedAttendanceFilter, selectedMealFilter, selectedRoomFilter, settings]);
 
   // Overall Statistics for Dashboard
   const stats = useMemo(() => {
@@ -441,6 +472,8 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
     const mealsCount = visibleStudents.filter((s) => getStudentMealInfo(s, settings).hasMeal).length;
     const mealsReceivedCount = visibleStudents.filter((s) => s.mealReceived).length;
     const tshirtsReceivedCount = visibleStudents.filter((s) => s.tshirtReceived).length;
+    const roomsAssignedCount = visibleStudents.filter((s) => s.roomNumber && s.roomNumber.trim() !== '').length;
+    const keysReceivedCount = visibleStudents.filter((s) => s.roomNumber && s.keyReceived).length;
     const totalPaid = visibleStudents.reduce((acc, s) => acc + (s.paidAmount || 0), 0);
     const totalRemaining = visibleStudents.reduce((acc, s) => acc + (s.remainingAmount || 0), 0);
     const totalExpected = visibleStudents.reduce((acc, s) => acc + (s.totalAmount || 0), 0);
@@ -448,6 +481,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
     const returnPercent = total > 0 ? Math.round((returnCount / total) * 100) : 0;
     const mealsPercent = mealsCount > 0 ? Math.round((mealsReceivedCount / mealsCount) * 100) : 0;
     const tshirtsPercent = total > 0 ? Math.round((tshirtsReceivedCount / total) * 100) : 0;
+    const keysPercent = roomsAssignedCount > 0 ? Math.round((keysReceivedCount / roomsAssignedCount) * 100) : 0;
 
     return {
       total,
@@ -460,6 +494,9 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
       mealsPercent,
       tshirtsReceivedCount,
       tshirtsPercent,
+      roomsAssignedCount,
+      keysReceivedCount,
+      keysPercent,
       totalPaid,
       totalRemaining,
       totalExpected,
@@ -473,7 +510,8 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
     selectedGenderFilter !== 'all' ||
     selectedRoleFilter !== 'all' ||
     selectedAttendanceFilter !== 'all' ||
-    selectedMealFilter !== 'all';
+    selectedMealFilter !== 'all' ||
+    selectedRoomFilter !== 'all';
 
   const handleResetFilters = () => {
     setSearchTerm('');
@@ -483,6 +521,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
     setSelectedRoleFilter('all');
     setSelectedAttendanceFilter('all');
     setSelectedMealFilter('all');
+    setSelectedRoomFilter('all');
   };
 
   // CSV Export
@@ -508,6 +547,8 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
       'طريقة الدفع',
       'حضور الذهاب',
       'حضور العودة',
+      'رقم الغرفة والتسكين',
+      'تسليم مفتاح الغرفة',
     ];
 
     const rows = filteredStudents.map((s) => {
@@ -538,6 +579,8 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
         s.paymentMethod,
         s.checkInDeparture ? 'حضر ✅' : 'غائب 🔲',
         s.checkInReturn ? 'حضر ✅' : 'غائب 🔲',
+        s.roomNumber ? `"${s.roomNumber}"` : 'غير مسكّن',
+        s.roomNumber ? (s.keyReceived ? 'تم تسليم المفتاح ✅' : 'في انتظار المفتاح ⏳') : '—',
       ];
     });
 
@@ -632,7 +675,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
         </div>
 
         {/* Real-time KPI Ribbon (لوحة المؤشرات الحية) */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-2">
           {/* Total Registered */}
           <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl flex items-center justify-between">
             <div>
@@ -693,6 +736,22 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
             </div>
           </div>
 
+          {/* Hotel Rooms & Keys Delivery Progress */}
+          <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl flex items-center justify-between">
+            <div>
+              <span className="text-[10px] text-slate-400 block font-bold">الغرف والمفاتيح 🏨 🔑</span>
+              <strong className="text-lg font-black text-purple-400 font-mono">
+                {stats.keysReceivedCount} <span className="text-xs text-slate-400">/ {stats.roomsAssignedCount}</span>
+              </strong>
+              <div className="text-[10px] text-purple-300 font-bold mt-0.5">
+                استلموا المفتاح: {stats.keysPercent}%
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+              <Building className="w-5 h-5" />
+            </div>
+          </div>
+
           {/* Financials Overview */}
           <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl flex items-center justify-between col-span-2 sm:col-span-1">
             <div>
@@ -714,11 +773,11 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
         <div className="space-y-3 pt-3 border-t border-slate-800">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5">
             {/* Quick Search Input */}
-            <div className="lg:col-span-4 relative">
+            <div className="lg:col-span-2 relative">
               <Search className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
               <input
                 type="text"
-                placeholder="بحث سريع بالاسم، الهاتف، كود التذكرة، الكلية، المرافق..."
+                placeholder="بحث سريع..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 text-white rounded-xl pr-9 pl-8 py-2.5 text-xs sm:text-sm focus:border-amber-500 focus:outline-none placeholder:text-slate-500"
@@ -765,6 +824,21 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                 <option value="no_meal">بدون وجبة طعام</option>
                 <option value="tshirt_received">استلموا التيشرت 👕✅</option>
                 <option value="tshirt_pending">لم يستلموا التيشرت 👕⏳</option>
+              </select>
+            </div>
+
+            {/* Hotel Room & Key Filter (فلتر الغرف والمفاتيح) */}
+            <div className="lg:col-span-2">
+              <select
+                value={selectedRoomFilter}
+                onChange={(e) => setSelectedRoomFilter(e.target.value as any)}
+                className="w-full bg-slate-950 border border-slate-800 text-purple-300 font-bold rounded-xl px-3 py-2.5 text-xs sm:text-sm focus:border-amber-500 focus:outline-none"
+              >
+                <option value="all">الغرف والتسكين (الكل)</option>
+                <option value="assigned">مسكنين بغرفة 🏨</option>
+                <option value="key_received">استلموا المفتاح 🔑✅</option>
+                <option value="key_pending">بانتظار المفتاح 🔑⏳</option>
+                <option value="unassigned">غير مسكنين بعد</option>
               </select>
             </div>
 
@@ -930,6 +1004,13 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                       أتوبيس {student.busNumber} {student.seatNumber ? `• مقعد #${student.seatNumber}` : ''}
                     </span>
 
+                    {student.roomNumber && student.roomNumber.trim() !== '' && (
+                      <span className="bg-purple-950 text-purple-300 border border-purple-700/50 px-2 py-1 rounded-lg font-bold flex items-center gap-1 font-mono">
+                        <Building className="w-3 h-3 text-purple-400" />
+                        <span>غرفة #{student.roomNumber}</span>
+                      </span>
+                    )}
+
                     <span
                       className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 ${
                         isPaid
@@ -943,76 +1024,101 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                     </span>
                   </div>
 
-                  {/* Interactive Attendance & Merch Quick Toggles (Mobile Row) */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-1">
-                    {/* Departure Toggle */}
-                    <button
-                      type="button"
-                      onClick={() => onToggleCheckInDeparture && onToggleCheckInDeparture(student.id)}
-                      className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center ${
-                        student.checkInDeparture
-                          ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300 shadow-sm'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                      }`}
-                    >
-                      <span className="text-[10px] text-slate-400">حضور الذهاب</span>
-                      <span>{student.checkInDeparture ? '✅ حضر الذهاب' : '🔲 غائب في الذهاب'}</span>
-                    </button>
+                  {/* Interactive Attendance, Room Key & Merch Quick Toggles (Mobile Row - STRICTLY CONDITIONAL) */}
+                  {(() => {
+                    const hasTshirt = Boolean(
+                      student.tshirtSize &&
+                      student.tshirtSize !== 'none' &&
+                      student.tshirtSize !== 'None' &&
+                      student.tshirtSize !== 'بدون' &&
+                      student.tshirtSize !== '-'
+                    );
+                    const showRoom = Boolean(student.roomNumber && student.roomNumber.trim() !== '');
+                    const showTshirt = hasTshirt;
+                    const showMeal = mealInfo.hasMeal;
+                    const activeCount = 2 + (showRoom ? 1 : 0) + (showTshirt ? 1 : 0) + (showMeal ? 1 : 0);
+                    const gridClass = activeCount >= 4 ? 'grid-cols-2 sm:grid-cols-4' : activeCount === 3 ? 'grid-cols-3' : 'grid-cols-2';
 
-                    {/* Return Toggle */}
-                    <button
-                      type="button"
-                      onClick={() => onToggleCheckInReturn && onToggleCheckInReturn(student.id)}
-                      className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center ${
-                        student.checkInReturn
-                          ? 'bg-indigo-950/80 border-indigo-500/50 text-indigo-300 shadow-sm'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                      }`}
-                    >
-                      <span className="text-[10px] text-slate-400">حضور العودة</span>
-                      <span>{student.checkInReturn ? '✅ حضر العودة' : '🔲 غائب في العودة'}</span>
-                    </button>
+                    return (
+                      <div className={`grid ${gridClass} gap-1.5 pt-1`}>
+                        {/* Departure Toggle */}
+                        <button
+                          type="button"
+                          onClick={() => onToggleCheckInDeparture && onToggleCheckInDeparture(student.id)}
+                          className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center cursor-pointer active:scale-95 ${
+                            student.checkInDeparture
+                              ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300 shadow-sm'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <span className="text-[10px] text-slate-400">حضور الذهاب</span>
+                          <span>{student.checkInDeparture ? '✅ حضر الذهاب' : '🔲 غائب في الذهاب'}</span>
+                        </button>
 
-                    {/* Meal Toggle */}
-                    {mealInfo.hasMeal ? (
-                      <button
-                        type="button"
-                        onClick={() => onToggleMealReceived && onToggleMealReceived(student.id)}
-                        className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center ${
-                          student.mealReceived
-                            ? 'bg-amber-950/80 border-amber-500/50 text-amber-300'
-                            : 'bg-slate-950 border-amber-500/30 text-amber-400'
-                        }`}
-                      >
-                        <span className="text-[10px] opacity-80">وجبة 🍔</span>
-                        <span>{student.mealReceived ? '✅ استلم الوجبة' : '🔲 في الانتظار'}</span>
-                      </button>
-                    ) : (
-                      <div className="p-2 rounded-xl text-[10px] bg-slate-950/60 border border-slate-800/80 text-slate-500 flex items-center justify-center text-center font-medium">
-                        بدون وجبة
+                        {/* Return Toggle */}
+                        <button
+                          type="button"
+                          onClick={() => onToggleCheckInReturn && onToggleCheckInReturn(student.id)}
+                          className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center cursor-pointer active:scale-95 ${
+                            student.checkInReturn
+                              ? 'bg-indigo-950/80 border-indigo-500/50 text-indigo-300 shadow-sm'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <span className="text-[10px] text-slate-400">حضور العودة</span>
+                          <span>{student.checkInReturn ? '✅ حضر العودة' : '🔲 غائب في العودة'}</span>
+                        </button>
+
+                        {/* Room Key Toggle - STRICTLY CONDITIONAL: Only if student has assigned room */}
+                        {showRoom && (
+                          <button
+                            type="button"
+                            onClick={() => onToggleKeyReceived && onToggleKeyReceived(student.id)}
+                            className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center cursor-pointer active:scale-95 ${
+                              student.keyReceived
+                                ? 'bg-purple-950/80 border-purple-500/60 text-purple-200 shadow-sm'
+                                : 'bg-slate-950 border-purple-500/40 text-purple-300 hover:border-purple-400'
+                            }`}
+                          >
+                            <span className="text-[10px] text-slate-400 font-mono">غرفة #{student.roomNumber}</span>
+                            <span>{student.keyReceived ? '🔑 تم المفتاح' : '⏳ تسليم المفتاح'}</span>
+                          </button>
+                        )}
+
+                        {/* T-Shirt Toggle - STRICTLY CONDITIONAL: Only if student actually has t-shirt */}
+                        {showTshirt && (
+                          <button
+                            type="button"
+                            onClick={() => onToggleTShirtReceived && onToggleTShirtReceived(student.id)}
+                            className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center cursor-pointer active:scale-95 ${
+                              student.tshirtReceived
+                                ? 'bg-purple-950/80 border-purple-500/50 text-purple-300 shadow-sm'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            <span className="text-[10px] text-slate-400">تيشرت {student.tshirtSize}</span>
+                            <span>{student.tshirtReceived ? '✅ تم التسليم' : '🔲 لم يستلم'}</span>
+                          </button>
+                        )}
+
+                        {/* Meal Toggle - STRICTLY CONDITIONAL: Only if student actually has meal */}
+                        {showMeal && (
+                          <button
+                            type="button"
+                            onClick={() => onToggleMealReceived && onToggleMealReceived(student.id)}
+                            className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center cursor-pointer active:scale-95 ${
+                              student.mealReceived
+                                ? 'bg-amber-950/80 border-amber-500/50 text-amber-300 shadow-sm'
+                                : 'bg-slate-950 border-amber-500/30 text-amber-400 hover:border-amber-500'
+                            }`}
+                          >
+                            <span className="text-[10px] opacity-80 truncate max-w-[80px]">🍔 {mealInfo.mealName}</span>
+                            <span>{student.mealReceived ? '✅ استلم الوجبة' : '🔲 في الانتظار'}</span>
+                          </button>
+                        )}
                       </div>
-                    )}
-
-                    {/* T-Shirt Toggle / Empty badge */}
-                    {student.tshirtSize && student.tshirtSize !== 'none' && student.tshirtSize !== 'None' && student.tshirtSize !== 'بدون' && student.tshirtSize !== '-' ? (
-                      <button
-                        type="button"
-                        onClick={() => onToggleTShirtReceived && onToggleTShirtReceived(student.id)}
-                        className={`p-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center justify-center ${
-                          student.tshirtReceived
-                            ? 'bg-purple-950/80 border-purple-500/50 text-purple-300'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                        }`}
-                      >
-                        <span className="text-[10px] text-slate-400">تيشرت {student.tshirtSize}</span>
-                        <span>{student.tshirtReceived ? '✅ تم التسليم' : '🔲 لم يستلم'}</span>
-                      </button>
-                    ) : (
-                      <div className="p-2 rounded-xl text-[10px] bg-slate-950/60 border border-slate-800/80 text-slate-500 flex items-center justify-center text-center font-medium">
-                        بدون تيشيرت
-                      </div>
-                    )}
-                  </div>
+                    );
+                  })()}
 
                   {/* Selected Addons Mobile Badges */}
                   {student.selectedAddonIds && student.selectedAddonIds.length > 0 && (
@@ -1129,6 +1235,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                 <th className="py-3.5 px-3">المشارك والصفة</th>
                 <th className="py-3.5 px-3">الهاتف</th>
                 <th className="py-3.5 px-3 text-center">الأتوبيس والمقعد</th>
+                <th className="py-3.5 px-3 text-center">الغرفة والمفتاح</th>
                 <th className="py-3.5 px-3 text-center">التيشرت والوجبة</th>
                 <th className="py-3.5 px-3 text-center">حضور الذهاب والعودة</th>
                 <th className="py-3.5 px-3">السداد والماليات</th>
@@ -1138,7 +1245,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
             <tbody className="divide-y divide-slate-800/60">
               {filteredStudents.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 text-slate-500">
+                  <td colSpan={9} className="text-center py-12 text-slate-500">
                     لا يوجد طلاب مطابقون للبحث والفلترة الحالية.
                   </td>
                 </tr>
@@ -1232,51 +1339,87 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                         </span>
                       </td>
 
-                      {/* Merch & Meals (T-Shirt & Meal toggles) */}
+                      {/* Room & Key Toggle (الغرفة ومفتاح الغرفة) */}
                       <td className="py-3 px-3 text-center">
-                        <div className="flex flex-col gap-1 items-center">
-                          {/* T-Shirt Toggle Button */}
-                          {student.tshirtSize && student.tshirtSize !== 'none' && student.tshirtSize !== 'None' && student.tshirtSize !== 'بدون' && student.tshirtSize !== '-' ? (
+                        {student.roomNumber && student.roomNumber.trim() !== '' ? (
+                          <div className="flex flex-col gap-1 items-center">
+                            <span className="bg-purple-950 text-purple-300 border border-purple-700/50 text-[11px] px-2 py-0.5 rounded-md font-bold flex items-center justify-center gap-1 font-mono">
+                              <Building className="w-3 h-3 text-purple-400" />
+                              <span>غرفة #{student.roomNumber}</span>
+                            </span>
                             <button
                               type="button"
-                              onClick={() => onToggleTShirtReceived && onToggleTShirtReceived(student.id)}
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold border transition flex items-center gap-1 ${
-                                student.tshirtReceived
-                                  ? 'bg-purple-950/80 border-purple-500/50 text-purple-300'
-                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                              onClick={() => onToggleKeyReceived && onToggleKeyReceived(student.id)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border transition flex items-center gap-1 cursor-pointer active:scale-95 ${
+                                student.keyReceived
+                                  ? 'bg-purple-950/80 border-purple-500/60 text-purple-200 shadow-sm'
+                                  : 'bg-slate-900 border-purple-500/40 text-purple-300 hover:border-purple-400'
                               }`}
-                              title="انقر لتعديل حالة تسليم التيشرت"
+                              title="انقر لتعديل حالة تسليم مفتاح الغرفة"
                             >
-                              <span>👕 {student.tshirtSize}</span>
-                              <span>{student.tshirtReceived ? '✅' : '🔲'}</span>
+                              <Key className="w-3 h-3" />
+                              <span>{student.keyReceived ? 'تم المفتاح ✅' : 'تسليم ⏳'}</span>
                             </button>
-                          ) : (
-                            <span className="text-[10px] text-slate-500 bg-slate-950/60 border border-slate-800/80 px-2 py-0.5 rounded font-medium">
-                              بدون تيشيرت
-                            </span>
-                          )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-600 text-xs font-mono">—</span>
+                        )}
+                      </td>
 
-                          {/* Meal Toggle Button */}
-                          {mealInfo.hasMeal ? (
-                            <button
-                              type="button"
-                              onClick={() => onToggleMealReceived && onToggleMealReceived(student.id)}
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold border transition flex items-center gap-1 ${
-                                student.mealReceived
-                                  ? 'bg-amber-950/80 border-amber-500/50 text-amber-300'
-                                  : 'bg-slate-900 border-amber-500/30 text-amber-400 hover:border-amber-500'
-                              }`}
-                              title="انقر لتعديل حالة تسليم الوجبة"
-                            >
-                              <span>🍔 {mealInfo.mealName.slice(0, 10)}</span>
-                              <span>{student.mealReceived ? '✅' : '🔲'}</span>
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-slate-500 bg-slate-950/60 border border-slate-800/80 px-2 py-0.5 rounded font-medium">
-                              بدون وجبة
-                            </span>
-                          )}
-                        </div>
+                      {/* Merch & Meals (T-Shirt & Meal toggles - STRICTLY CONDITIONAL) */}
+                      <td className="py-3 px-3 text-center">
+                        {(() => {
+                          const hasTshirt = Boolean(
+                            student.tshirtSize &&
+                            student.tshirtSize !== 'none' &&
+                            student.tshirtSize !== 'None' &&
+                            student.tshirtSize !== 'بدون' &&
+                            student.tshirtSize !== '-'
+                          );
+                          const hasMeal = mealInfo.hasMeal;
+
+                          if (!hasTshirt && !hasMeal) {
+                            return <span className="text-slate-600 text-xs font-mono">—</span>;
+                          }
+
+                          return (
+                            <div className="flex flex-col gap-1 items-center">
+                              {/* T-Shirt Toggle Button */}
+                              {hasTshirt && (
+                                <button
+                                  type="button"
+                                  onClick={() => onToggleTShirtReceived && onToggleTShirtReceived(student.id)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold border transition flex items-center gap-1 cursor-pointer active:scale-95 ${
+                                    student.tshirtReceived
+                                      ? 'bg-purple-950/80 border-purple-500/50 text-purple-300'
+                                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                                  }`}
+                                  title="انقر لتعديل حالة تسليم التيشرت"
+                                >
+                                  <span>👕 {student.tshirtSize}</span>
+                                  <span>{student.tshirtReceived ? '✅' : '🔲'}</span>
+                                </button>
+                              )}
+
+                              {/* Meal Toggle Button */}
+                              {hasMeal && (
+                                <button
+                                  type="button"
+                                  onClick={() => onToggleMealReceived && onToggleMealReceived(student.id)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold border transition flex items-center gap-1 cursor-pointer active:scale-95 ${
+                                    student.mealReceived
+                                      ? 'bg-amber-950/80 border-amber-500/50 text-amber-300'
+                                      : 'bg-slate-900 border-amber-500/30 text-amber-400 hover:border-amber-500'
+                                  }`}
+                                  title="انقر لتعديل حالة تسليم الوجبة"
+                                >
+                                  <span>🍔 {mealInfo.mealName.slice(0, 10)}</span>
+                                  <span>{student.mealReceived ? '✅' : '🔲'}</span>
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Attendance Toggles (Departure & Return) */}
@@ -1696,7 +1839,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                             <div>
                               <label className="block text-slate-300 font-semibold mb-1 text-xs">الوجبة الغذائية 🍔</label>
                               <select
-                                value={formData.hasMeal ? (formData.mealOption || 'وجبة سوبر VIP') : 'none'}
+                                value={formData.hasMeal ? (formData.mealOption || 'وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)') : 'none'}
                                 onChange={(e) => {
                                   const val = e.target.value;
                                   if (val === 'none') {
@@ -1708,7 +1851,7 @@ export const StudentsCRM: React.FC<StudentsCRMProps> = ({
                                 className="w-full bg-slate-950 border border-slate-800 text-white rounded-xl px-3 py-2 focus:border-amber-500 focus:outline-none text-xs sm:text-sm font-bold"
                               >
                                 <option value="none">🚫 بدون وجبة</option>
-                                <option value="وجبة سوبر VIP">🍔 وجبة سوبر VIP</option>
+                                <option value="وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)">🍔 وجبة VIP (رز وربع فرخة وبطاطس وطحينة وسلطة ومياه وكولا)</option>
                                 <option value="وجبة عادية">🍔 وجبة عادية</option>
                                 <option value="ساندوتش خفيف">🥪 ساندوتش خفيف</option>
                               </select>
