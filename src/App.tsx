@@ -1720,7 +1720,6 @@ export default function App() {
         isOpen={isQRScannerOpen}
         onClose={() => setIsQRScannerOpen(false)}
         students={activeTrip.students}
-        settings={activeTrip.settings}
         userSession={userSession}
         onUpdateStudent={handleUpdateStudent}
         onToggleCheckInDeparture={handleToggleCheckInDeparture}
