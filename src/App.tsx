@@ -90,13 +90,7 @@ export default function App() {
   // Staff & Role Security State
   const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>(loadStaffAccounts);
   const [userSession, setUserSession] = useState<ActiveUserSession>(loadActiveUserSession);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('kayan_auth_locked') !== 'true';
-    } catch {
-      return true;
-    }
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(loadActivityLogs);
 
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -1720,6 +1714,7 @@ export default function App() {
         isOpen={isQRScannerOpen}
         onClose={() => setIsQRScannerOpen(false)}
         students={activeTrip.students}
+        settings={activeTrip.settings}
         userSession={userSession}
         onUpdateStudent={handleUpdateStudent}
         onToggleCheckInDeparture={handleToggleCheckInDeparture}
