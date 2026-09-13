@@ -94,7 +94,18 @@ export default function App() {
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(loadActivityLogs);
 
   const [activeTab, setActiveTab] = useState('dashboard');
-
+useEffect(() => {
+    try {
+      // إجبار قفل النظام وعمل تسجيل خروج للجلسة المخزنة مؤقتاً عند أي تحديث للصفحة
+      localStorage.setItem('kayan_auth_locked', 'true');
+      
+      // لو دالة loadActiveUserSession بتسترجع الموظف من الـ localStorage، 
+      // ممكن نضيف سطر يمسح الجلسة النشطة عشان يظهر شاشة الـ PIN إجباري:
+      // localStorage.removeItem('kayan_active_user_session'); 
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
   // Modal controls
   const [isQRScannerOpen, setIsQRScannerOpen] = useState(false);
   const [selectedStudentForPass, setSelectedStudentForPass] = useState<Student | null>(null);
